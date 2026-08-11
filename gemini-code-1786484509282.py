@@ -28,15 +28,29 @@ def save_db(db):
     with open(DATA_FILE, "w") as f:
         json.dump(db, f, indent=4)
 
-# --- FONCTIONS MATHÉMATIQUES ---
+# --- FONCTIONS MATHÉMATIQUES & ELO ---
 def get_prob(elo_a, elo_b):
+    """Calcule la probabilité brute de victoire (Formule ELO standard)"""
     return 1 / (1 + 10 ** ((elo_b - elo_a) / 400))
+
+def get_probs_with_draw(elo_a, elo_b):
+    """Calcule les probabilités en incluant le Match Nul"""
+    p_a_raw = get_prob(elo_a, elo_b)
+    p_b_raw = 1 - p_a_raw
+    
+    # La probabilité de match nul est max (15%) si les ELO sont égaux
+    prob_draw = 0.15 * (1 - abs(p_a_raw - p_b_raw))
+    
+    # On ajuste les chances de victoire en soustrayant la probabilité du nul
+    prob_a = p_a_raw * (1 - prob_draw)
+    prob_b = p_b_raw * (1 - prob_draw)
+    
+    return prob_a, prob_b, prob_draw
 
 def get_odds(prob):
     return round(1 / prob, 2) if prob > 0 else 1.01
 
 def format_elo(real_elo):
-    # L'ELO réel commence à 1000, mais on l'affiche à partir de 0
     return int(real_elo - 1000)
 
 # --- INITIALISATION SESSION ---
@@ -61,7 +75,6 @@ if st.session_state.user_id is None and not st.session_state.is_admin:
             pwd = st.text_input("Mot de passe", type="password", key="pwd_player")
             
             if st.button("Se connecter"):
-                # Trouver l'ID correspondant au nom
                 p_id = next(uid for uid, name in player_names.items() if name == selected_name)
                 if pwd == db["players"][p_id]["password"]:
                     st.session_state.user_id = p_id
@@ -78,7 +91,7 @@ if st.session_state.user_id is None and not st.session_state.is_admin:
             else:
                 st.error("Mot de passe administrateur incorrect")
                 
-    st.stop() # Arrête le rendu ici si non connecté
+    st.stop() 
 
 # --- BARRE LATÉRALE (DÉCONNEXION) ---
 with st.sidebar:
@@ -98,8 +111,6 @@ with st.sidebar:
 # --- INTERFACE ADMINISTRATEUR ---
 if st.session_state.is_admin:
     st.title("⚙️ Panneau d'Administration")
-    st.write("Gérez les joueurs et les accès ici.")
-    
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Ajouter un joueur")
@@ -122,7 +133,7 @@ if st.session_state.is_admin:
                 st.rerun()
                 
     with col2:
-        st.subheader("Modifier / Supprimer (Danger)")
+        st.subheader("Modifier / Supprimer")
         if db["players"]:
             p_to_edit = st.selectbox("Sélectionner un joueur", list(db["players"].keys()), format_func=lambda x: db["players"][x]["name"])
             new_p_name = st.text_input("Nouveau nom", value=db["players"][p_to_edit]["name"])
@@ -152,7 +163,6 @@ with tab1:
 with tab2:
     st.header("📅 Gestion des Matchs")
     
-    # Créer un match
     with st.expander("➕ Créer un nouveau match", expanded=False):
         c1, c2 = st.columns(2)
         all_players = list(db["players"].keys())
@@ -190,39 +200,39 @@ with tab2:
         name2 = db["players"][m["p2"]]["name"]
         dt = datetime.fromisoformat(m["datetime"])
         
-        prob_p1 = get_prob(db["players"][m["p1"]]["elo"], db["players"][m["p2"]]["elo"])
+        # Calcul des 3 cotes (P1, P2 et Nul)
+        prob_p1, prob_p2, prob_draw = get_probs_with_draw(db["players"][m["p1"]]["elo"], db["players"][m["p2"]]["elo"])
         odds_p1 = get_odds(prob_p1)
-        odds_p2 = get_odds(1 - prob_p1)
+        odds_p2 = get_odds(prob_p2)
+        odds_draw = get_odds(prob_draw)
         
         st.markdown(f"### {name1} 🆚 {name2}")
         st.caption(f"🕒 Prévu le {dt.strftime('%d/%m/%Y à %H:%M')}")
-        st.write(f"Cotes actuelles : **{name1} ({odds_p1})** | **{name2} ({odds_p2})**")
+        st.write(f"Cotes actuelles : **{name1} ({odds_p1})** | **Nul ({odds_draw})** | **{name2} ({odds_p2})**")
         
-        # Section Paris
         is_playing = st.session_state.user_id in [m["p1"], m["p2"]]
         is_started = datetime.now() > dt
-        
-        # Trouver si j'ai déjà parié
         my_bet = next((b for b in m["bets"] if b["bettor"] == st.session_state.user_id), None)
         
         if my_bet:
-            pred_name = db["players"][my_bet['predicted']]['name']
-            st.success(f"✅ Tu as parié {my_bet['amount']} CAD sur {pred_name} (Cote validée: {my_bet['odds']})")
+            pred_name = "Match Nul" if my_bet['predicted'] == "draw" else db["players"][my_bet['predicted']]['name']
+            st.success(f"✅ Tu as parié {my_bet['amount']} CAD sur {pred_name} (Cote: {my_bet['odds']})")
         elif is_playing:
             st.warning("Tu ne peux pas parier sur ton propre match.")
         elif is_started:
             st.error("Match commencé, les paris sont fermés.")
         else:
             with st.form(key=f"bet_form_{m_id}"):
-                pred = st.radio("Qui va gagner ?", [m["p1"], m["p2"]], format_func=lambda x: db["players"][x]["name"])
+                options_pari = {m["p1"]: f"Victoire {name1}", "draw": "Match Nul", m["p2"]: f"Victoire {name2}"}
+                pred = st.radio("Sur quel résultat parier ?", list(options_pari.keys()), format_func=lambda x: options_pari[x])
                 amount = st.number_input("Montant de la mise (Max 5 CAD)", min_value=0.5, max_value=5.0, step=0.5)
                 submit_bet = st.form_submit_button("Valider mon pari")
                 
                 if submit_bet:
-                    # Enregistrer le pari
-                    odds_locked = odds_p1 if pred == m["p1"] else odds_p2
+                    if pred == m["p1"]: odds_locked = odds_p1
+                    elif pred == m["p2"]: odds_locked = odds_p2
+                    else: odds_locked = odds_draw
                     
-                    # Déduire l'argent du solde du joueur et le mettre dans la banque (cagnotte)
                     db["players"][st.session_state.user_id]["balance"] -= amount
                     db["bank"] += amount
                     
@@ -238,24 +248,34 @@ with tab2:
                     
         # Clôture du match
         with st.expander("🏁 Terminer ce match (Saisir le résultat)"):
-            winner = st.radio("Vainqueur", [m["p1"], m["p2"]], format_func=lambda x: db["players"][x]["name"], key=f"win_{m_id}")
+            options_result = {m["p1"]: f"Victoire {name1}", "draw": "Match Nul", m["p2"]: f"Victoire {name2}"}
+            winner = st.radio("Résultat final", list(options_result.keys()), format_func=lambda x: options_result[x], key=f"win_{m_id}")
+            
             if st.button("Valider le résultat et distribuer les gains", key=f"btn_{m_id}"):
-                # ELO Update
-                loser = m["p2"] if winner == m["p1"] else m["p1"]
-                elo_w = db["players"][winner]["elo"]
-                elo_l = db["players"][loser]["elo"]
-                p_w = get_prob(elo_w, elo_l)
+                elo_p1 = db["players"][m["p1"]]["elo"]
+                elo_p2 = db["players"][m["p2"]]["elo"]
+                p_1_raw = get_prob(elo_p1, elo_p2)
+                p_2_raw = 1 - p_1_raw
                 
                 K = 32
-                gain_elo = K * (1 - p_w)
-                db["players"][winner]["elo"] += gain_elo
-                db["players"][loser]["elo"] -= gain_elo
+                if winner == m["p1"]:
+                    score_p1, score_p2 = 1, 0
+                    db["players"][m["p1"]]["stats_won"] += 1
+                elif winner == m["p2"]:
+                    score_p1, score_p2 = 0, 1
+                    db["players"][m["p2"]]["stats_won"] += 1
+                else: # Match Nul
+                    score_p1, score_p2 = 0.5, 0.5
+                    
+                gain_elo_p1 = K * (score_p1 - p_1_raw)
+                gain_elo_p2 = K * (score_p2 - p_2_raw)
                 
-                db["players"][winner]["stats_played"] += 1
-                db["players"][loser]["stats_played"] += 1
-                db["players"][winner]["stats_won"] += 1
+                db["players"][m["p1"]]["elo"] += gain_elo_p1
+                db["players"][m["p2"]]["elo"] += gain_elo_p2
+                db["players"][m["p1"]]["stats_played"] += 1
+                db["players"][m["p2"]]["stats_played"] += 1
                 
-                # Bet Resolution
+                # Résolution des paris
                 for bet in m["bets"]:
                     if bet["predicted"] == winner:
                         payout = bet["amount"] * bet["odds"]
@@ -264,18 +284,32 @@ with tab2:
                         net_bettor = profit - tax
                         
                         db["players"][bet["bettor"]]["balance"] += (bet["amount"] + net_bettor)
-                        db["players"][winner]["balance"] += tax
                         db["bank"] -= payout
                         
-                        if net_bettor > db["players"][bet["bettor"]]["max_win"]:
+                        # Distribution de la taxe
+                        if winner == "draw":
+                            db["players"][m["p1"]]["balance"] += tax / 2
+                            db["players"][m["p2"]]["balance"] += tax / 2
+                        else:
+                            db["players"][winner]["balance"] += tax
+                            
+                        if net_bettor > db["players"][bet["bettor"]].get("max_win", 0):
                             db["players"][bet["bettor"]]["max_win"] = net_bettor
                 
                 m["status"] = "completed"
                 m["winner"] = winner
                 
+                if winner == "draw":
+                    desc = f"🤝 Match Nul entre {name1} et {name2} (Évol. ELO: {name1} {gain_elo_p1:+.0f}, {name2} {gain_elo_p2:+.0f})"
+                else:
+                    w_name = name1 if winner == m["p1"] else name2
+                    l_name = name2 if winner == m["p1"] else name1
+                    gain = gain_elo_p1 if winner == m["p1"] else gain_elo_p2
+                    desc = f"🏆 {w_name} a battu {l_name} (+{int(gain)} ELO)"
+                    
                 db["history"].append({
                     "date": datetime.now().isoformat(),
-                    "desc": f"{db['players'][winner]['name']} a battu {db['players'][loser]['name']} (+{int(gain_elo)} ELO)"
+                    "desc": desc
                 })
                 
                 save_db(db)
@@ -285,9 +319,7 @@ with tab2:
 # --- TAB 3 : TRICOUNT (DETTES) ---
 with tab3:
     st.header("💸 Tricount & Règlements")
-    st.write("Qui doit de l'argent à qui ?")
     
-    # 1. Résumé des soldes
     balances = {db["players"][pid]["name"]: db["players"][pid]["balance"] for pid in db["players"]}
     balances["🏦 La Banque (Cagnotte)"] = db["bank"]
     
@@ -299,10 +331,9 @@ with tab3:
             
     st.divider()
     
-    # L'astuce de la Banque : Pour que le Tricount soit résoluble entre amis, la banque doit être répartie.
-    st.info("💡 **Note sur la Banque :** Dans un système de paris entre amis, la 'Banque' (qui encaisse les pertes et paie les gains) n'est pas une vraie personne. Pour solder complètement les comptes, la banque doit être partagée équitablement entre tous les joueurs.")
+    st.info("💡 Pour solder les comptes, la banque (qui accumule les pertes des joueurs) doit être partagée équitablement.")
     if abs(db["bank"]) > 0.01:
-        if st.button("🔄 Partager la Banque entre tous les joueurs (Obligatoire avant règlement)"):
+        if st.button("🔄 Partager la Banque entre tous les joueurs"):
             nb_players = len(db["players"])
             part = db["bank"] / nb_players
             for pid in db["players"]:
@@ -315,7 +346,6 @@ with tab3:
     st.divider()
     st.subheader("🔁 Remboursements Simplifiés")
     
-    # Algorithme Tricount
     crediteurs = [[k, v] for k, v in balances.items() if v > 0.01]
     debiteurs = [[k, abs(v)] for k, v in balances.items() if v < -0.01]
     
@@ -341,7 +371,7 @@ with tab3:
         for t in transactions:
             st.markdown(t)
             
-        st.warning("⚠️ Attention, marquer les dettes comme payées remettra tous les soldes à ZÉRO.")
+        st.warning("⚠️ Marquer les dettes comme payées remettra tous les soldes financiers à ZÉRO.")
         if st.button("✅ Marquer toutes les dettes comme PAYÉES"):
             for pid in db["players"]:
                 db["players"][pid]["balance"] = 0.0
@@ -359,12 +389,16 @@ with tab4:
     completed.sort(key=lambda x: x["datetime"], reverse=True)
     
     for m in completed:
-        w_name = db["players"][m["winner"]]["name"]
-        l_id = m["p2"] if m["winner"] == m["p1"] else m["p1"]
-        l_name = db["players"][l_id]["name"]
         dt = datetime.fromisoformat(m["datetime"]).strftime('%d/%m/%Y')
-        
-        st.markdown(f"**{dt}** : 🏆 **{w_name}** a battu {l_name} ({len(m['bets'])} paris placés)")
+        if m["winner"] == "draw":
+            p1_name = db["players"][m["p1"]]["name"]
+            p2_name = db["players"][m["p2"]]["name"]
+            st.markdown(f"**{dt}** : 🤝 Match Nul entre **{p1_name}** et **{p2_name}** ({len(m['bets'])} paris)")
+        else:
+            w_name = db["players"][m["winner"]]["name"]
+            l_id = m["p2"] if m["winner"] == m["p1"] else m["p1"]
+            l_name = db["players"][l_id]["name"]
+            st.markdown(f"**{dt}** : 🏆 **{w_name}** a battu {l_name} ({len(m['bets'])} paris)")
 
 # --- TAB 5 : STATS ---
 with tab5:
@@ -372,14 +406,14 @@ with tab5:
     
     cols = st.columns(3)
     
-    # Pire/Meilleur Parieur (selon le max_win)
-    best_bettor = max(db["players"].values(), key=lambda x: x["max_win"])
-    most_active = max(db["players"].values(), key=lambda x: x["stats_played"])
-    
-    with cols[0]:
-        st.metric("Plus gros gain (Net)", f"{best_bettor['max_win']:.2f} CAD", best_bettor['name'])
-    with cols[1]:
-        st.metric("Joueur le plus actif", f"{most_active['stats_played']} matchs", most_active['name'])
-    with cols[2]:
-        total_bets = sum(len(m["bets"]) for m in db["matches"].values())
-        st.metric("Total des paris réalisés", f"{total_bets}")
+    if db["players"]:
+        best_bettor = max(db["players"].values(), key=lambda x: x.get("max_win", 0))
+        most_active = max(db["players"].values(), key=lambda x: x["stats_played"])
+        
+        with cols[0]:
+            st.metric("Plus gros gain (Net)", f"{best_bettor.get('max_win', 0):.2f} CAD", best_bettor['name'])
+        with cols[1]:
+            st.metric("Joueur le plus actif", f"{most_active['stats_played']} matchs", most_active['name'])
+        with cols[2]:
+            total_bets = sum(len(m["bets"]) for m in db["matches"].values())
+            st.metric("Total des paris réalisés", f"{total_bets}")
