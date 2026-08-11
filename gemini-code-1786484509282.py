@@ -44,9 +44,6 @@ def get_probs_with_draw(elo_a, elo_b):
 def get_odds(prob):
     return round(1 / prob, 2) if prob > 0 else 1.01
 
-def format_elo(real_elo):
-    return int(real_elo - 1000)
-
 # --- INITIALISATION SESSION ---
 db = init_db()
 if "user_id" not in st.session_state:
@@ -116,7 +113,7 @@ if st.session_state.is_admin:
                 db["players"][uid] = {
                     "name": new_name,
                     "password": new_pwd,
-                    "elo": 1000.0,
+                    "elo": 1000.0,  # Base ELO à 1000
                     "balance": 0.0,
                     "stats_played": 0,
                     "stats_won": 0,
@@ -152,30 +149,29 @@ with tab1:
     if not players_list:
         st.info("Aucun joueur n'est inscrit pour le moment.")
     else:
-        # Préparation des données pour le tableau Pandas
         df_data = []
         for i, p in enumerate(players_list, 1):
             win_rate = (p["stats_won"] / p["stats_played"] * 100) if p["stats_played"] > 0 else 0
             df_data.append({
                 "Rang": i,
                 "Joueur": p["name"],
-                "ELO": format_elo(p["elo"]),
+                "ELO": int(p["elo"]),
                 "Matchs": p["stats_played"],
                 "Victoires": p["stats_won"],
                 "Taux de Victoire": win_rate
             })
             
         df = pd.DataFrame(df_data)
+        max_elo_val = int(df["ELO"].max())
         
-        # Configuration visuelle du tableau
         st.dataframe(
             df,
             column_config={
                 "Rang": st.column_config.NumberColumn("Rang", format="%d 🏅"),
                 "ELO": st.column_config.ProgressColumn(
                     "Points ELO", 
-                    min_value=0, 
-                    max_value=max(df["ELO"].max() + 50, 200), 
+                    min_value=800, 
+                    max_value=max(max_elo_val + 50, 1200), 
                     format="%d pts"
                 ),
                 "Taux de Victoire": st.column_config.ProgressColumn(
@@ -191,7 +187,6 @@ with tab1:
         
         st.divider()
         st.subheader("📈 Écarts de niveau (Graphique ELO)")
-        # Affichage d'un graphique en barres
         chart_data = df[["Joueur", "ELO"]].set_index("Joueur")
         st.bar_chart(chart_data)
 
@@ -337,7 +332,7 @@ with tab2:
                     w_name = name1 if winner == m["p1"] else name2
                     l_name = name2 if winner == m["p1"] else name1
                     gain = gain_elo_p1 if winner == m["p1"] else gain_elo_p2
-                    desc = f"🏆 {w_name} a battu {l_name} (+{int(gain)} ELO)"
+                    desc = f"🏆 {w_name} a battu {l_name} ({int(gain):+d} ELO)"
                     
                 db["history"].append({
                     "date": datetime.now().isoformat(),
@@ -454,7 +449,6 @@ with tab5:
         st.divider()
         st.subheader("🎯 Performances des joueurs")
         
-        # Préparation des données pour les graphiques
         chart_data = []
         for p in db["players"].values():
             win_rate = (p["stats_won"] / p["stats_played"] * 100) if p["stats_played"] > 0 else 0
