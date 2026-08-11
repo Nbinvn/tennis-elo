@@ -3,6 +3,7 @@ import os
 import uuid
 from datetime import datetime
 import streamlit as st
+import pandas as pd
 
 # --- CONFIGURATION ---
 DATA_FILE = "joueurs_v2.json"
@@ -30,21 +31,14 @@ def save_db(db):
 
 # --- FONCTIONS MATHÉMATIQUES & ELO ---
 def get_prob(elo_a, elo_b):
-    """Calcule la probabilité brute de victoire (Formule ELO standard)"""
     return 1 / (1 + 10 ** ((elo_b - elo_a) / 400))
 
 def get_probs_with_draw(elo_a, elo_b):
-    """Calcule les probabilités en incluant le Match Nul"""
     p_a_raw = get_prob(elo_a, elo_b)
     p_b_raw = 1 - p_a_raw
-    
-    # La probabilité de match nul est max (15%) si les ELO sont égaux
     prob_draw = 0.15 * (1 - abs(p_a_raw - p_b_raw))
-    
-    # On ajuste les chances de victoire en soustrayant la probabilité du nul
     prob_a = p_a_raw * (1 - prob_draw)
     prob_b = p_b_raw * (1 - prob_draw)
-    
     return prob_a, prob_b, prob_draw
 
 def get_odds(prob):
@@ -147,17 +141,59 @@ if st.session_state.is_admin:
     st.stop()
 
 # --- INTERFACE JOUEUR PRINCIPALE ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏆 Classement", "📅 Matchs & Paris", "💸 Tricount", "📜 Historique", "📊 Stats"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏆 Classement", "📅 Matchs & Paris", "💸 Tricount", "📜 Historique", "📊 Dashboard"])
 
-# --- TAB 1 : CLASSEMENT ---
+# --- TAB 1 : CLASSEMENT VISUEL ---
 with tab1:
     st.header("🏆 Classement ELO")
     players_list = list(db["players"].values())
     players_list.sort(key=lambda x: x["elo"], reverse=True)
     
-    for i, p in enumerate(players_list, 1):
-        win_rate = (p["stats_won"] / p["stats_played"] * 100) if p["stats_played"] > 0 else 0
-        st.write(f"**#{i} {p['name']}** — **{format_elo(p['elo'])} pts** *(Victoires: {win_rate:.0f}%)*")
+    if not players_list:
+        st.info("Aucun joueur n'est inscrit pour le moment.")
+    else:
+        # Préparation des données pour le tableau Pandas
+        df_data = []
+        for i, p in enumerate(players_list, 1):
+            win_rate = (p["stats_won"] / p["stats_played"] * 100) if p["stats_played"] > 0 else 0
+            df_data.append({
+                "Rang": i,
+                "Joueur": p["name"],
+                "ELO": format_elo(p["elo"]),
+                "Matchs": p["stats_played"],
+                "Victoires": p["stats_won"],
+                "Taux de Victoire": win_rate
+            })
+            
+        df = pd.DataFrame(df_data)
+        
+        # Configuration visuelle du tableau
+        st.dataframe(
+            df,
+            column_config={
+                "Rang": st.column_config.NumberColumn("Rang", format="%d 🏅"),
+                "ELO": st.column_config.ProgressColumn(
+                    "Points ELO", 
+                    min_value=0, 
+                    max_value=max(df["ELO"].max() + 50, 200), 
+                    format="%d pts"
+                ),
+                "Taux de Victoire": st.column_config.ProgressColumn(
+                    "Taux de Victoire", 
+                    min_value=0, 
+                    max_value=100, 
+                    format="%d %%"
+                )
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+        
+        st.divider()
+        st.subheader("📈 Écarts de niveau (Graphique ELO)")
+        # Affichage d'un graphique en barres
+        chart_data = df[["Joueur", "ELO"]].set_index("Joueur")
+        st.bar_chart(chart_data)
 
 # --- TAB 2 : MATCHS ET PARIS ---
 with tab2:
@@ -200,7 +236,6 @@ with tab2:
         name2 = db["players"][m["p2"]]["name"]
         dt = datetime.fromisoformat(m["datetime"])
         
-        # Calcul des 3 cotes (P1, P2 et Nul)
         prob_p1, prob_p2, prob_draw = get_probs_with_draw(db["players"][m["p1"]]["elo"], db["players"][m["p2"]]["elo"])
         odds_p1 = get_odds(prob_p1)
         odds_p2 = get_odds(prob_p2)
@@ -246,7 +281,6 @@ with tab2:
                     st.success("Pari enregistré !")
                     st.rerun()
                     
-        # Clôture du match
         with st.expander("🏁 Terminer ce match (Saisir le résultat)"):
             options_result = {m["p1"]: f"Victoire {name1}", "draw": "Match Nul", m["p2"]: f"Victoire {name2}"}
             winner = st.radio("Résultat final", list(options_result.keys()), format_func=lambda x: options_result[x], key=f"win_{m_id}")
@@ -264,7 +298,7 @@ with tab2:
                 elif winner == m["p2"]:
                     score_p1, score_p2 = 0, 1
                     db["players"][m["p2"]]["stats_won"] += 1
-                else: # Match Nul
+                else: 
                     score_p1, score_p2 = 0.5, 0.5
                     
                 gain_elo_p1 = K * (score_p1 - p_1_raw)
@@ -275,7 +309,6 @@ with tab2:
                 db["players"][m["p1"]]["stats_played"] += 1
                 db["players"][m["p2"]]["stats_played"] += 1
                 
-                # Résolution des paris
                 for bet in m["bets"]:
                     if bet["predicted"] == winner:
                         payout = bet["amount"] * bet["odds"]
@@ -286,7 +319,6 @@ with tab2:
                         db["players"][bet["bettor"]]["balance"] += (bet["amount"] + net_bettor)
                         db["bank"] -= payout
                         
-                        # Distribution de la taxe
                         if winner == "draw":
                             db["players"][m["p1"]]["balance"] += tax / 2
                             db["players"][m["p2"]]["balance"] += tax / 2
@@ -400,20 +432,47 @@ with tab4:
             l_name = db["players"][l_id]["name"]
             st.markdown(f"**{dt}** : 🏆 **{w_name}** a battu {l_name} ({len(m['bets'])} paris)")
 
-# --- TAB 5 : STATS ---
+# --- TAB 5 : DASHBOARD STATS ---
 with tab5:
-    st.header("📊 Statistiques Globales")
-    
-    cols = st.columns(3)
+    st.header("📊 Tableau de Bord")
     
     if db["players"]:
+        cols = st.columns(3)
+        
         best_bettor = max(db["players"].values(), key=lambda x: x.get("max_win", 0))
         most_active = max(db["players"].values(), key=lambda x: x["stats_played"])
+        total_bets = sum(len(m["bets"]) for m in db["matches"].values())
+        total_completed_matches = len([m for m in db["matches"].values() if m["status"] == "completed"])
         
         with cols[0]:
-            st.metric("Plus gros gain (Net)", f"{best_bettor.get('max_win', 0):.2f} CAD", best_bettor['name'])
+            st.metric("🏆 Plus gros gain (Pari)", f"{best_bettor.get('max_win', 0):.2f} CAD", best_bettor['name'])
         with cols[1]:
-            st.metric("Joueur le plus actif", f"{most_active['stats_played']} matchs", most_active['name'])
+            st.metric("🎾 Joueur le plus actif", f"{most_active['stats_played']} matchs", most_active['name'])
         with cols[2]:
-            total_bets = sum(len(m["bets"]) for m in db["matches"].values())
-            st.metric("Total des paris réalisés", f"{total_bets}")
+            st.metric("💰 Volume de Paris", f"{total_bets} paris réalisés", f"sur {total_completed_matches} matchs terminés")
+            
+        st.divider()
+        st.subheader("🎯 Performances des joueurs")
+        
+        # Préparation des données pour les graphiques
+        chart_data = []
+        for p in db["players"].values():
+            win_rate = (p["stats_won"] / p["stats_played"] * 100) if p["stats_played"] > 0 else 0
+            chart_data.append({
+                "Joueur": p["name"],
+                "Matchs Joués": p["stats_played"],
+                "Taux de Victoire (%)": win_rate
+            })
+            
+        df_charts = pd.DataFrame(chart_data).set_index("Joueur")
+        
+        col_c1, col_c2 = st.columns(2)
+        with col_c1:
+            st.markdown("**Nombre de matchs joués**")
+            st.bar_chart(df_charts["Matchs Joués"], color="#4CAF50")
+            
+        with col_c2:
+            st.markdown("**Taux de victoire (%)**")
+            st.bar_chart(df_charts["Taux de Victoire (%)"], color="#2196F3")
+    else:
+        st.info("Ajoutez des joueurs et jouez des matchs pour voir les statistiques apparaître !")
