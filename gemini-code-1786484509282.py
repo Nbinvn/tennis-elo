@@ -6,14 +6,13 @@ import streamlit as st
 import pandas as pd
 
 # --- CONFIGURATION ---
-DATA_FILE = "joueurs_v2.json"
+DATA_FILE = "joueurs_v3.json"
 ADMIN_PWD = "admin"  # Mot de passe administrateur par défaut
 
 # --- GESTION DE LA BASE DE DONNÉES (JSON) ---
 def init_db():
     if not os.path.exists(DATA_FILE):
         db = {
-            "bank": 0.0,
             "players": {},
             "matches": {},
             "history": []
@@ -53,7 +52,7 @@ if "is_admin" not in st.session_state:
 
 # --- SYSTÈME D'AUTHENTIFICATION ---
 if st.session_state.user_id is None and not st.session_state.is_admin:
-    st.title("🔒 Connexion - Tennis Bet & ELO")
+    st.title("🔒 Connexion - Tennis Pronos & ELO")
     
     tab_login, tab_admin = st.tabs(["Joueur", "Administrateur"])
     
@@ -91,8 +90,8 @@ with st.sidebar:
     else:
         nom_joueur = db["players"][st.session_state.user_id]["name"]
         st.write(f"👤 **Connecté : {nom_joueur}**")
-        solde = db["players"][st.session_state.user_id]["balance"]
-        st.metric("Mon Solde", f"{solde:.2f} CAD")
+        pts_prono = db["players"][st.session_state.user_id].get("prono_points", 0)
+        st.metric("Mes Points Prono", f"{pts_prono}pts")
         
     if st.button("Se déconnecter"):
         st.session_state.user_id = None
@@ -113,11 +112,10 @@ if st.session_state.is_admin:
                 db["players"][uid] = {
                     "name": new_name,
                     "password": new_pwd,
-                    "elo": 1000.0,  # Base ELO à 1000
-                    "balance": 0.0,
+                    "elo": 1000.0,
+                    "prono_points": 0,
                     "stats_played": 0,
-                    "stats_won": 0,
-                    "max_win": 0.0
+                    "stats_won": 0
                 }
                 save_db(db)
                 st.success(f"Joueur {new_name} créé !")
@@ -138,11 +136,11 @@ if st.session_state.is_admin:
     st.stop()
 
 # --- INTERFACE JOUEUR PRINCIPALE ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏆 Classement", "📅 Matchs & Paris", "💸 Tricount", "📜 Historique", "📊 Dashboard"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏆 Classement ELO", "📅 Matchs & Pronos", "🎯 Classement Pronos", "📜 Historique", "📊 Dashboard"])
 
-# --- TAB 1 : CLASSEMENT VISUEL ---
+# --- TAB 1 : CLASSEMENT ELO VISUEL ---
 with tab1:
-    st.header("🏆 Classement ELO")
+    st.header("🏆 Classement ELO des Joueurs")
     players_list = list(db["players"].values())
     players_list.sort(key=lambda x: x["elo"], reverse=True)
     
@@ -190,9 +188,9 @@ with tab1:
         chart_data = df[["Joueur", "ELO"]].set_index("Joueur")
         st.bar_chart(chart_data)
 
-# --- TAB 2 : MATCHS ET PARIS ---
+# --- TAB 2 : MATCHS ET PRONOS ---
 with tab2:
-    st.header("📅 Gestion des Matchs")
+    st.header("📅 Matchs & Pronostics")
     
     with st.expander("➕ Créer un nouveau match", expanded=False):
         c1, c2 = st.columns(2)
@@ -213,14 +211,14 @@ with tab2:
                 "datetime": dt_str,
                 "status": "pending",
                 "winner": None,
-                "bets": []
+                "bets": []  # Contiendra les pronos
             }
             save_db(db)
             st.success("Match programmé !")
             st.rerun()
             
     st.divider()
-    st.subheader("🔥 Matchs à venir & Paris")
+    st.subheader("🔥 Matchs à venir & Vos Pronos")
     
     pending_matches = {k: v for k, v in db["matches"].items() if v["status"] == "pending"}
     if not pending_matches:
@@ -238,7 +236,7 @@ with tab2:
         
         st.markdown(f"### {name1} 🆚 {name2}")
         st.caption(f"🕒 Prévu le {dt.strftime('%d/%m/%Y à %H:%M')}")
-        st.write(f"Cotes actuelles : **{name1} ({odds_p1})** | **Nul ({odds_draw})** | **{name2} ({odds_p2})**")
+        st.write(f"Cotes indicatives : **{name1} ({odds_p1})** | **Nul ({odds_draw})** | **{name2} ({odds_p2})**")
         
         is_playing = st.session_state.user_id in [m["p1"], m["p2"]]
         is_started = datetime.now() > dt
@@ -246,41 +244,39 @@ with tab2:
         
         if my_bet:
             pred_name = "Match Nul" if my_bet['predicted'] == "draw" else db["players"][my_bet['predicted']]['name']
-            st.success(f"✅ Tu as parié {my_bet['amount']} CAD sur {pred_name} (Cote: {my_bet['odds']})")
+            st.success(f"✅ Ton pronostic enregistré : **{pred_name}** (Cote: {my_bet['odds']})")
         elif is_playing:
-            st.warning("Tu ne peux pas parier sur ton propre match.")
+            st.warning("Tu ne peux pas pronostiquer sur ton propre match.")
         elif is_started:
-            st.error("Match commencé, les paris sont fermés.")
+            st.error("Match commencé, les pronostics sont fermés.")
         else:
             with st.form(key=f"bet_form_{m_id}"):
                 options_pari = {m["p1"]: f"Victoire {name1}", "draw": "Match Nul", m["p2"]: f"Victoire {name2}"}
-                pred = st.radio("Sur quel résultat parier ?", list(options_pari.keys()), format_func=lambda x: options_pari[x])
-                amount = st.number_input("Montant de la mise (Max 5 CAD)", min_value=0.5, max_value=5.0, step=0.5)
-                submit_bet = st.form_submit_button("Valider mon pari")
+                pred = st.radio("Ton pronostic ?", list(options_pari.keys()), format_func=lambda x: options_pari[x])
+                submit_prono = st.form_submit_button("Valider mon pronostic")
                 
-                if submit_bet:
+                if submit_prono:
                     if pred == m["p1"]: odds_locked = odds_p1
                     elif pred == m["p2"]: odds_locked = odds_p2
                     else: odds_locked = odds_draw
                     
-                    db["players"][st.session_state.user_id]["balance"] -= amount
-                    db["bank"] += amount
+                    # On retire l'ancien prono si l'utilisateur en avait déjà mis un
+                    m["bets"] = [b for b in m["bets"] if b["bettor"] != st.session_state.user_id]
                     
                     m["bets"].append({
                         "bettor": st.session_state.user_id,
                         "predicted": pred,
-                        "amount": amount,
                         "odds": odds_locked
                     })
                     save_db(db)
-                    st.success("Pari enregistré !")
+                    st.success("Pronostic enregistré avec succès !")
                     st.rerun()
                     
         with st.expander("🏁 Terminer ce match (Saisir le résultat)"):
             options_result = {m["p1"]: f"Victoire {name1}", "draw": "Match Nul", m["p2"]: f"Victoire {name2}"}
             winner = st.radio("Résultat final", list(options_result.keys()), format_func=lambda x: options_result[x], key=f"win_{m_id}")
             
-            if st.button("Valider le résultat et distribuer les gains", key=f"btn_{m_id}"):
+            if st.button("Valider le résultat et distribuer les points", key=f"btn_{m_id}"):
                 elo_p1 = db["players"][m["p1"]]["elo"]
                 elo_p2 = db["players"][m["p2"]]["elo"]
                 p_1_raw = get_prob(elo_p1, elo_p2)
@@ -304,24 +300,13 @@ with tab2:
                 db["players"][m["p1"]]["stats_played"] += 1
                 db["players"][m["p2"]]["stats_played"] += 1
                 
+                # Distribution des points de pronostic (Façon MonPetitProno)
                 for bet in m["bets"]:
                     if bet["predicted"] == winner:
-                        payout = bet["amount"] * bet["odds"]
-                        profit = payout - bet["amount"]
-                        tax = profit * 0.20
-                        net_bettor = profit - tax
-                        
-                        db["players"][bet["bettor"]]["balance"] += (bet["amount"] + net_bettor)
-                        db["bank"] -= payout
-                        
-                        if winner == "draw":
-                            db["players"][m["p1"]]["balance"] += tax / 2
-                            db["players"][m["p2"]]["balance"] += tax / 2
-                        else:
-                            db["players"][winner]["balance"] += tax
-                            
-                        if net_bettor > db["players"][bet["bettor"]].get("max_win", 0):
-                            db["players"][bet["bettor"]]["max_win"] = net_bettor
+                        points_gained = int(bet["odds"] * 10)
+                        if "prono_points" not in db["players"][bet["bettor"]]:
+                            db["players"][bet["bettor"]]["prono_points"] = 0
+                        db["players"][bet["bettor"]]["prono_points"] += points_gained
                 
                 m["status"] = "completed"
                 m["winner"] = winner
@@ -340,74 +325,49 @@ with tab2:
                 })
                 
                 save_db(db)
-                st.success("Match terminé et gains distribués !")
+                st.success("Match terminé et points de pronos distribués !")
                 st.rerun()
 
-# --- TAB 3 : TRICOUNT (DETTES) ---
+# --- TAB 3 : CLASSEMENT PRONOS ---
 with tab3:
-    st.header("💸 Tricount & Règlements")
+    st.header("🎯 Classement des Pronostiqueurs")
     
-    balances = {db["players"][pid]["name"]: db["players"][pid]["balance"] for pid in db["players"]}
-    balances["🏦 La Banque (Cagnotte)"] = db["bank"]
-    
-    st.subheader("Soldes actuels")
-    for nom, solde in balances.items():
-        if abs(solde) > 0.01:
-            color = "green" if solde > 0 else "red"
-            st.markdown(f"**{nom}** : :{color}[{solde:+.2f} CAD]")
-            
-    st.divider()
-    
-    st.info("💡 Pour solder les comptes, la banque (qui accumule les pertes des joueurs) doit être partagée équitablement.")
-    if abs(db["bank"]) > 0.01:
-        if st.button("🔄 Partager la Banque entre tous les joueurs"):
-            nb_players = len(db["players"])
-            part = db["bank"] / nb_players
-            for pid in db["players"]:
-                db["players"][pid]["balance"] += part
-            db["bank"] = 0.0
-            save_db(db)
-            st.success("Banque répartie avec succès !")
-            st.rerun()
-            
-    st.divider()
-    st.subheader("🔁 Remboursements Simplifiés")
-    
-    crediteurs = [[k, v] for k, v in balances.items() if v > 0.01]
-    debiteurs = [[k, abs(v)] for k, v in balances.items() if v < -0.01]
-    
-    crediteurs.sort(key=lambda x: x[1], reverse=True)
-    debiteurs.sort(key=lambda x: x[1], reverse=True)
-    
-    transactions = []
-    i, j = 0, 0
-    while i < len(crediteurs) and j < len(debiteurs):
-        c_name, c_amount = crediteurs[i]
-        d_name, d_amount = debiteurs[j]
-        
-        montant = min(c_amount, d_amount)
-        transactions.append(f"💸 **{d_name}** doit envoyer **{montant:.2f} CAD** à **{c_name}**")
-        
-        crediteurs[i][1] -= montant
-        debiteurs[j][1] -= montant
-        
-        if crediteurs[i][1] < 0.01: i += 1
-        if debiteurs[j][1] < 0.01: j += 1
-        
-    if transactions:
-        for t in transactions:
-            st.markdown(t)
-            
-        st.warning("⚠️ Marquer les dettes comme payées remettra tous les soldes financiers à ZÉRO.")
-        if st.button("✅ Marquer toutes les dettes comme PAYÉES"):
-            for pid in db["players"]:
-                db["players"][pid]["balance"] = 0.0
-            db["bank"] = 0.0
-            save_db(db)
-            st.success("Comptes remis à zéro !")
-            st.rerun()
+    players_prono = list(db["players"].values())
+    if not players_prono:
+        st.info("Aucun joueur inscrit.")
     else:
-        st.success("✨ Tout le monde est à jour ! Aucune dette.")
+        # Tri par points de pronostic décroissants
+        players_prono.sort(key=lambda x: x.get("prono_points", 0), reverse=True)
+        
+        prono_data = []
+        for i, p in enumerate(players_prono, 1):
+            prono_data.append({
+                "Rang": i,
+                "Joueur": p["name"],
+                "Points Prono": p.get("prono_points", 0)
+            })
+            
+        df_prono = pd.DataFrame(prono_data)
+        
+        st.dataframe(
+            df_prono,
+            column_config={
+                "Rang": st.column_config.NumberColumn("Rang", format="%d 🎯"),
+                "Points Prono": st.column_config.ProgressColumn(
+                    "Score",
+                    min_value=0,
+                    max_value=max(df_prono["Points Prono"].max() + 10, 50),
+                    format="%d pts"
+                )
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+        
+        st.divider()
+        st.subheader("📊 Comparatif des points")
+        chart_prono = df_prono.set_index("Joueur")["Points Prono"]
+        st.bar_chart(chart_prono, color="#FF9800")
 
 # --- TAB 4 : HISTORIQUE ---
 with tab4:
@@ -415,39 +375,40 @@ with tab4:
     completed = [m for m in db["matches"].values() if m["status"] == "completed"]
     completed.sort(key=lambda x: x["datetime"], reverse=True)
     
+    if not completed:
+        st.info("Aucun match terminé pour l'instant.")
     for m in completed:
         dt = datetime.fromisoformat(m["datetime"]).strftime('%d/%m/%Y')
         if m["winner"] == "draw":
             p1_name = db["players"][m["p1"]]["name"]
             p2_name = db["players"][m["p2"]]["name"]
-            st.markdown(f"**{dt}** : 🤝 Match Nul entre **{p1_name}** et **{p2_name}** ({len(m['bets'])} paris)")
+            st.markdown(f"**{dt}** : 🤝 Match Nul entre **{p1_name}** et **{p2_name}** ({len(m['bets'])} pronos)")
         else:
             w_name = db["players"][m["winner"]]["name"]
             l_id = m["p2"] if m["winner"] == m["p1"] else m["p1"]
             l_name = db["players"][l_id]["name"]
-            st.markdown(f"**{dt}** : 🏆 **{w_name}** a battu {l_name} ({len(m['bets'])} paris)")
+            st.markdown(f"**{dt}** : 🏆 **{w_name}** a battu {l_name} ({len(m['bets'])} pronos)")
 
 # --- TAB 5 : DASHBOARD STATS ---
 with tab5:
-    st.header("📊 Tableau de Bord")
+    st.header("📊 Tableau de Bord Global")
     
     if db["players"]:
-        cols = st.columns(3)
+        cols = st.columns(2)
         
-        best_bettor = max(db["players"].values(), key=lambda x: x.get("max_win", 0))
-        most_active = max(db["players"].values(), key=lambda x: x["stats_played"])
-        total_bets = sum(len(m["bets"]) for m in db["matches"].values())
+        total_pronos = sum(len(m["bets"]) for m in db["matches"].values())
         total_completed_matches = len([m for m in db["matches"].values() if m["status"] == "completed"])
         
+        best_prono_player = max(db["players"].values(), key=lambda x: x.get("prono_points", 0))
+        most_active = max(db["players"].values(), key=lambda x: x["stats_played"])
+        
         with cols[0]:
-            st.metric("🏆 Plus gros gain (Pari)", f"{best_bettor.get('max_win', 0):.2f} CAD", best_bettor['name'])
+            st.metric("🎯 Roi des Pronos", f"{best_prono_player.get('prono_points', 0)} pts", best_prono_player['name'])
         with cols[1]:
             st.metric("🎾 Joueur le plus actif", f"{most_active['stats_played']} matchs", most_active['name'])
-        with cols[2]:
-            st.metric("💰 Volume de Paris", f"{total_bets} paris réalisés", f"sur {total_completed_matches} matchs terminés")
             
         st.divider()
-        st.subheader("🎯 Performances des joueurs")
+        st.subheader("🎯 Performances des joueurs (Matchs & Taux de victoire)")
         
         chart_data = []
         for p in db["players"].values():
