@@ -6,7 +6,7 @@ import streamlit as st
 import pandas as pd
 
 # --- CONFIGURATION ---
-DATA_FILE = "joueurs_v3.json"
+DATA_FILE = "joueurs_v3.json"  # Conserve le fichier existant pour ne pas perdre les données
 ADMIN_PWD = "admin"  # Mot de passe administrateur par défaut
 
 # --- GESTION DE LA BASE DE DONNÉES (JSON) ---
@@ -91,7 +91,7 @@ with st.sidebar:
         nom_joueur = db["players"][st.session_state.user_id]["name"]
         st.write(f"👤 **Connecté : {nom_joueur}**")
         pts_prono = db["players"][st.session_state.user_id].get("prono_points", 0)
-        st.metric("Mes Points Prono", f"{pts_prono}pts")
+        st.metric("Mes Points Prono", f"{pts_prono} pts")
         
     if st.button("Se déconnecter"):
         st.session_state.user_id = None
@@ -211,14 +211,14 @@ with tab2:
                 "datetime": dt_str,
                 "status": "pending",
                 "winner": None,
-                "bets": []  # Contiendra les pronos
+                "bets": []
             }
             save_db(db)
             st.success("Match programmé !")
             st.rerun()
             
     st.divider()
-    st.subheader("🔥 Matchs à venir & Vos Pronos")
+    st.subheader("🔥 Matchs à venir & Pronostics de la communauté")
     
     pending_matches = {k: v for k, v in db["matches"].items() if v["status"] == "pending"}
     if not pending_matches:
@@ -234,9 +234,32 @@ with tab2:
         odds_p2 = get_odds(prob_p2)
         odds_draw = get_odds(prob_draw)
         
-        st.markdown(f"### {name1} 🆚 {name2}")
+        st.markdown(f"### 🎾 {name1} 🆚 {name2}")
         st.caption(f"🕒 Prévu le {dt.strftime('%d/%m/%Y à %H:%M')}")
         st.write(f"Cotes indicatives : **{name1} ({odds_p1})** | **Nul ({odds_draw})** | **{name2} ({odds_p2})**")
+        
+        # --- BLOC VISUEL : Qui a parié sur quoi ? ---
+        st.markdown("#### 👥 Pronostics enregistrés :")
+        if m["bets"]:
+            cols_bets = st.columns(len(m["bets"]))
+            for idx, bet in enumerate(m["bets"]):
+                bettor_name = db["players"][bet["bettor"]]["name"]
+                pred_val = bet["predicted"]
+                
+                if pred_val == "draw":
+                    choice_text = "Match Nul 🤝"
+                    badge_color = "orange"
+                elif pred_val == m["p1"]:
+                    choice_text = f"Victoire {name1}"
+                    badge_color = "green"
+                else:
+                    choice_text = f"Victoire {name2}"
+                    badge_color = "blue"
+                
+                with cols_bets[idx % len(cols_bets)]:
+                    st.info(f"**{bettor_name}**\n\n🎯 *{choice_text}*\n\n📈 Cote : {bet['odds']}")
+        else:
+            st.info("Aucun pronostic validé pour l'instant sur ce match. Soyez le premier !")
         
         is_playing = st.session_state.user_id in [m["p1"], m["p2"]]
         is_started = datetime.now() > dt
@@ -327,6 +350,7 @@ with tab2:
                 save_db(db)
                 st.success("Match terminé et points de pronos distribués !")
                 st.rerun()
+        st.divider()
 
 # --- TAB 3 : CLASSEMENT PRONOS ---
 with tab3:
@@ -336,7 +360,6 @@ with tab3:
     if not players_prono:
         st.info("Aucun joueur inscrit.")
     else:
-        # Tri par points de pronostic décroissants
         players_prono.sort(key=lambda x: x.get("prono_points", 0), reverse=True)
         
         prono_data = []
@@ -395,9 +418,6 @@ with tab5:
     
     if db["players"]:
         cols = st.columns(2)
-        
-        total_pronos = sum(len(m["bets"]) for m in db["matches"].values())
-        total_completed_matches = len([m for m in db["matches"].values() if m["status"] == "completed"])
         
         best_prono_player = max(db["players"].values(), key=lambda x: x.get("prono_points", 0))
         most_active = max(db["players"].values(), key=lambda x: x["stats_played"])
