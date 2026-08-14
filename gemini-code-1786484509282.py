@@ -5,9 +5,10 @@ from datetime import datetime, timedelta
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from streamlit_cookies_controller import CookieController
 
 # --- CONFIGURATION ---
-DATA_FILE = "joueurs_v3.json"  # Fichier conservé, AUCUNE DONNÉE ne sera perdue ou altérée !
+DATA_FILE = "joueurs_v3.json"  # Fichier conservé, AUCUNE DONNÉE altérée.
 ADMIN_PWD = "Admin2026"
 
 # --- GESTION DE LA BASE DE DONNÉES (JSON) ---
@@ -45,7 +46,6 @@ def get_odds(prob):
     return round(1 / prob, 2) if prob > 0 else 1.01
 
 def recalculate_all_stats(db):
-    """Recalcule intégralement l'ELO et les pronos de tous les joueurs en rejouant l'historique."""
     for pid in db["players"]:
         db["players"][pid]["elo"] = 1000.0
         db["players"][pid]["prono_points"] = 0
@@ -82,11 +82,9 @@ def recalculate_all_stats(db):
 
 # --- GÉNÉRATION D'HISTORIQUE DYNAMIQUE (POUR LES GRAPHIQUES) ---
 def get_elo_history_df(db):
-    """Génère un dataframe des points d'évolution ELO au fil du temps pour tous les joueurs."""
     records = []
     base_date = datetime(2026, 8, 10)
     
-    # État initial à la date de départ
     states = {pid: {"elo": 1000.0, "played": 0, "won": 0} for pid in db["players"]}
     for pid, p in db["players"].items():
         records.append({"Joueur": p["name"], "Date": base_date, "ELO": 1000.0, "Matchs": 0, "Victoires": 0})
@@ -117,14 +115,12 @@ def get_elo_history_df(db):
         states[p1]["played"] += 1
         states[p2]["played"] += 1
         
-        # Enregistrer l'état de TOUS les joueurs à cet instant T (Crucial pour Plotly x unified)
         for pid, p in db["players"].items():
             records.append({
                 "Joueur": p["name"], "Date": dt, "ELO": states[pid]["elo"],
                 "Matchs": states[pid]["played"], "Victoires": states[pid]["won"]
             })
             
-    # Point de chute actuel pour étendre les courbes jusqu'à aujourd'hui
     now = datetime.now()
     for pid, p in db["players"].items():
         records.append({
@@ -136,12 +132,15 @@ def get_elo_history_df(db):
     df["Ratio"] = (df["Victoires"] / df["Matchs"] * 100).fillna(0)
     return df
 
-# --- INITIALISATION SESSION ---
+# --- INITIALISATION SESSION & COOKIES ---
 db = init_db()
+cookie_controller = CookieController()
+
 if "user_id" not in st.session_state:
-    st.session_state.user_id = None
+    st.session_state.user_id = cookie_controller.get("user_id")
+
 if "is_admin" not in st.session_state:
-    st.session_state.is_admin = False
+    st.session_state.is_admin = (cookie_controller.get("is_admin") == "true")
 
 # --- SYSTÈME D'AUTHENTIFICATION ---
 if st.session_state.user_id is None and not st.session_state.is_admin:
@@ -155,25 +154,33 @@ if st.session_state.user_id is None and not st.session_state.is_admin:
         else:
             player_names = {p_id: p_data["name"] for p_id, p_data in db["players"].items()}
             sorted_names = sorted(list(player_names.values()), key=lambda x: x.lower())
-            selected_name = st.selectbox("Qui êtes-vous ?", sorted_names)
-            pwd = st.text_input("Mot de passe", type="password", key="pwd_player")
             
-            if st.button("Se connecter"):
-                p_id = next(uid for uid, name in player_names.items() if name == selected_name)
-                if pwd == db["players"][p_id]["password"]:
-                    st.session_state.user_id = p_id
-                    st.rerun()
-                else:
-                    st.error("Mot de passe incorrect")
+            with st.form(key="login_player_form"):
+                selected_name = st.selectbox("Qui êtes-vous ?", sorted_names)
+                pwd = st.text_input("Mot de passe", type="password")
+                submit_login = st.form_submit_button("Se connecter")
+                
+                if submit_login:
+                    p_id = next(uid for uid, name in player_names.items() if name == selected_name)
+                    if pwd == db["players"][p_id]["password"]:
+                        st.session_state.user_id = p_id
+                        cookie_controller.set("user_id", p_id)
+                        st.rerun()
+                    else:
+                        st.error("Mot de passe incorrect")
                     
     with tab_admin:
-        admin_pwd_input = st.text_input("Mot de passe administrateur", type="password", key="pwd_admin")
-        if st.button("Accès Admin"):
-            if admin_pwd_input == ADMIN_PWD:
-                st.session_state.is_admin = True
-                st.rerun()
-            else:
-                st.error("Mot de passe administrateur incorrect")
+        with st.form(key="login_admin_form"):
+            admin_pwd_input = st.text_input("Mot de passe administrateur", type="password")
+            submit_admin = st.form_submit_button("Accès Admin")
+            
+            if submit_admin:
+                if admin_pwd_input == ADMIN_PWD:
+                    st.session_state.is_admin = True
+                    cookie_controller.set("is_admin", "true")
+                    st.rerun()
+                else:
+                    st.error("Mot de passe administrateur incorrect")
     st.stop() 
 
 # --- BARRE LATÉRALE ---
@@ -189,6 +196,8 @@ with st.sidebar:
     if st.button("Se déconnecter"):
         st.session_state.user_id = None
         st.session_state.is_admin = False
+        cookie_controller.remove("user_id")
+        cookie_controller.remove("is_admin")
         st.rerun()
 
 # --- INTERFACE ADMINISTRATEUR GLOBALE ---
@@ -231,29 +240,47 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🏆 Classement ELO", "📅 Match
 # --- TAB 1 : CLASSEMENT ELO VISUEL ---
 with tab1:
     st.header("🏆 Classement ELO des Joueurs")
-    players_list = list(db["players"].values())
-    players_list.sort(key=lambda x: x["elo"], reverse=True)
     
-    if not players_list:
+    # On récupère les paires (ID_joueur, Données) pour pouvoir chercher dans l'historique
+    players_items = list(db["players"].items())
+    players_items.sort(key=lambda x: x[1]["elo"], reverse=True)
+    
+    if not players_items:
         st.info("Aucun joueur n'est inscrit pour le moment.")
     else:
-        # Tableau existant
+        # On charge tous les matchs complétés pour le calcul à la volée
+        completed_matches = [m for m in db["matches"].values() if m["status"] == "completed"]
+        
         df_data = []
-        for i, p in enumerate(players_list, 1):
+        for i, (pid, p) in enumerate(players_items, 1):
+            # Calculs à la volée (ne modifie pas le JSON)
+            draws = len([m for m in completed_matches if m["winner"] == "draw" and (m["p1"] == pid or m["p2"] == pid)])
+            losses = p["stats_played"] - p["stats_won"] - draws
             win_rate = (p["stats_won"] / p["stats_played"] * 100) if p["stats_played"] > 0 else 0
+            
             df_data.append({
-                "Rang": i, "Joueur": p["name"], "ELO": int(p["elo"]),
-                "Matchs": p["stats_played"], "Victoires": p["stats_won"], "Taux de Victoire": win_rate
+                "Rang": i, 
+                "Joueur": p["name"], 
+                "ELO": int(p["elo"]),
+                "Matchs": p["stats_played"], 
+                "Victoires": p["stats_won"], 
+                "Nuls": draws,
+                "Défaites": losses,
+                "Taux de Victoire": win_rate
             })
             
         df = pd.DataFrame(df_data)
-        max_elo_val = int(df["ELO"].max())
+        max_elo_val = int(df["ELO"].max()) if not df.empty else 1000
         
         st.dataframe(
             df,
             column_config={
                 "Rang": st.column_config.NumberColumn("Rang", format="%d 🏅"),
                 "ELO": st.column_config.ProgressColumn("Points ELO", min_value=800, max_value=max(max_elo_val + 50, 1200), format="%d pts"),
+                "Matchs": st.column_config.NumberColumn("Matchs"),
+                "Victoires": st.column_config.NumberColumn("V", help="Victoires"),
+                "Nuls": st.column_config.NumberColumn("N", help="Matchs Nuls"),
+                "Défaites": st.column_config.NumberColumn("D", help="Défaites"),
                 "Taux de Victoire": st.column_config.ProgressColumn("Taux de Victoire", min_value=0, max_value=100, format="%d %%")
             },
             hide_index=True, use_container_width=True
@@ -262,15 +289,12 @@ with tab1:
         st.divider()
         st.subheader("📈 Historique des leaders et évolution ELO")
         
-        # Filtres UI
         col_filtre, _ = st.columns([1, 2])
         with col_filtre:
             time_filter = st.radio("Filtre temporel :", ["Depuis le début", "30 derniers jours", "7 derniers jours"], horizontal=True)
             
-        # Génération des données dynamiques
         df_hist = get_elo_history_df(db)
         
-        # Application du filtre
         if time_filter == "30 derniers jours":
             cutoff = datetime.now() - timedelta(days=30)
             df_hist = df_hist[df_hist["Date"] >= cutoff]
@@ -279,20 +303,14 @@ with tab1:
             df_hist = df_hist[df_hist["Date"] >= cutoff]
 
         if not df_hist.empty:
-            # --- NOUVEAUTÉ : GESTION DES SUPERPOSITIONS (EX-AEQUO) ---
-            # 1. On crée une ligne de texte propre à chaque joueur avec ses stats
             df_hist["Info_Joueur"] = df_hist.apply(
                 lambda x: f"• <b>{x['Joueur']}</b> (M: {x['Matchs']} | V: {x['Victoires']} | Ratio: {x['Ratio']:.0f}%)", 
                 axis=1
             )
-            
-            # 2. On fusionne les lignes de texte pour tous les joueurs ayant le MÊME ELO à la MÊME DATE
             df_hist["Infos_Combinees"] = df_hist.groupby(["Date", "ELO"])["Info_Joueur"].transform(lambda x: "<br>".join(x))
 
-            # Construction du graphique Plotly interactif
             fig = px.line(
                 df_hist, x="Date", y="ELO", color="Joueur", markers=True,
-                # On injecte uniquement la date et notre nouvelle colonne combinée
                 hover_data={"Date": "|%d/%m/%Y %H:%M", "Infos_Combinees": True}
             )
             
@@ -300,12 +318,11 @@ with tab1:
                 mode="lines+markers",
                 line=dict(width=3), 
                 marker=dict(size=6),
-                # customdata[0] contient désormais "Infos_Combinees" (les joueurs fusionnés si besoin)
                 hovertemplate="Date : <b>%{x}</b><br>Score ELO : <b>%{y:.0f} pts</b><br><br>%{customdata[0]}<extra></extra>"
             )
             
             fig.update_layout(
-                hovermode="closest", # On garde closest pour la fluidité
+                hovermode="closest", 
                 legend_title="Joueurs",
                 xaxis_title="",
                 yaxis_title="Score ELO",
@@ -315,7 +332,6 @@ with tab1:
                 hoverlabel=dict(bgcolor="rgba(30, 30, 30, 0.95)", font_size=13)
             )
             
-            # Grilles discrètes
             fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(255,255,255,0.1)')
             fig.update_xaxes(showgrid=False)
 
@@ -323,7 +339,7 @@ with tab1:
         else:
             st.info("Aucune donnée disponible pour cette période.")
 
-# --- TAB 2 : MATCHS ET PRONOS (Intact) ---
+# --- TAB 2 : MATCHS ET PRONOS ---
 with tab2:
     st.header("📅 Matchs & Pronostics")
     
@@ -438,7 +454,6 @@ with tab2:
 with tab3:
     st.header("🎯 Classement des Pronostiqueurs")
     
-    # 1. Calcul des points sur les 7 derniers jours (Rétroactif)
     seven_days_ago = datetime.now() - timedelta(days=7)
     recent_prono_gains = {pid: 0 for pid in db["players"]}
     
@@ -451,14 +466,12 @@ with tab3:
                 if bet["predicted"] == winner:
                     recent_prono_gains[bet["bettor"]] += int(bet["odds"] * 10)
 
-    # 2. Tri des joueurs
     players_prono = list(db["players"].items())
     players_prono.sort(key=lambda x: x[1].get("prono_points", 0), reverse=True)
     
     if not players_prono:
         st.info("Aucun joueur inscrit.")
     else:
-        # -- PODIUM TOP 3 --
         if len(players_prono) >= 3:
             p1, p2, p3 = players_prono[0], players_prono[1], players_prono[2]
             col_pod2, col_pod1, col_pod3 = st.columns([1, 1.1, 1])
@@ -481,16 +494,15 @@ with tab3:
                 """, unsafe_allow_html=True)
                 
             with col_pod2:
-                st.write("") # Spacer
-                draw_podium_card(p2, "#9CA3AF", "rgba(156, 163, 175, 0.1)", "🥈") # Argent
+                st.write("") 
+                draw_podium_card(p2, "#9CA3AF", "rgba(156, 163, 175, 0.1)", "🥈") 
             with col_pod1:
-                draw_podium_card(p1, "#F59E0B", "rgba(245, 158, 11, 0.15)", "🥇") # Or
+                draw_podium_card(p1, "#F59E0B", "rgba(245, 158, 11, 0.15)", "🥇") 
             with col_pod3:
                 st.write("") 
-                st.write("") # Spacer plus grand
-                draw_podium_card(p3, "#B45309", "rgba(180, 83, 9, 0.1)", "🥉") # Bronze
+                st.write("") 
+                draw_podium_card(p3, "#B45309", "rgba(180, 83, 9, 0.1)", "🥉") 
 
-            # -- LISTE DES SUIVANTS (Cards) --
             st.markdown("<br>", unsafe_allow_html=True)
             for i, (pid, p) in enumerate(players_prono[3:], 4):
                 pts = p.get("prono_points", 0)
@@ -515,12 +527,11 @@ with tab3:
                 </div>
                 """, unsafe_allow_html=True)
         else:
-            # Mode fallback propre s'il y a moins de 3 joueurs inscrits
             for i, (pid, p) in enumerate(players_prono, 1):
                 pts = p.get("prono_points", 0)
                 st.write(f"**{i}. {p['name']}** - {pts} pts")
 
-# --- TAB 4 : HISTORIQUE (Intact) ---
+# --- TAB 4 : HISTORIQUE ---
 with tab4:
     st.header("📜 Historique des Matchs")
     completed = [m for m in db["matches"].values() if m["status"] == "completed"]
@@ -539,19 +550,16 @@ with tab4:
             l_name = db["players"][l_id]["name"]
             st.markdown(f"**{dt}** : 🏆 **{w_name}** a battu {l_name} ({len(m['bets'])} pronos)")
 
-# --- TAB 5 : DASHBOARD STATS (Gestion des Ex-Aequo) ---
+# --- TAB 5 : DASHBOARD STATS ---
 with tab5:
     st.header("📊 Tableau de Bord Global")
     
     if db["players"]:
         cols = st.columns(2)
-        
-        # 1. Gestion dynamique des ex-aequo (Pronos)
         max_prono = max([p.get("prono_points", 0) for p in db["players"].values()], default=0)
         rois = [p["name"] for p in db["players"].values() if p.get("prono_points", 0) == max_prono]
         rois_text = " & ".join(rois) if len(rois) <= 2 else ", ".join(rois)
         
-        # 2. Gestion dynamique des ex-aequo (Activité)
         max_active = max([p["stats_played"] for p in db["players"].values()], default=0)
         actifs = [p["name"] for p in db["players"].values() if p["stats_played"] == max_active]
         actifs_text = " & ".join(actifs) if len(actifs) <= 2 else ", ".join(actifs)
@@ -583,7 +591,7 @@ with tab5:
     else:
         st.info("Ajoutez des joueurs et jouez des matchs pour voir les statistiques apparaître !")
 
-# --- TAB 6 : ACCÈS ADMIN MATCHS (Intact) ---
+# --- TAB 6 : ACCÈS ADMIN MATCHS ---
 with tab6:
     st.header("🛠️ Gestion Administrateur des Matchs")
     st.info("Cette section est réservée pour corriger des erreurs (dates, résultats, suppressions).")
