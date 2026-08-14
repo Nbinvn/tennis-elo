@@ -183,56 +183,96 @@ if st.session_state.user_id is None and not st.session_state.is_admin:
                     st.error("Mot de passe administrateur incorrect")
     st.stop() 
 
-# --- BARRE LATÉRALE ---
+# --- BARRE LATÉRALE (DASHBOARD UTILISATEUR) ---
 with st.sidebar:
     if st.session_state.is_admin:
         st.write("👤 **Connecté en tant que : ADMIN GLOBALE**")
+        st.divider()
     else:
-        nom_joueur = db["players"][st.session_state.user_id]["name"]
-        st.write(f"👤 **Connecté : {nom_joueur}**")
-        pts_prono = db["players"][st.session_state.user_id].get("prono_points", 0)
-        st.metric("Mes Points Prono", f"{pts_prono} pts")
+        uid = st.session_state.user_id
+        user_data = db["players"][uid]
+        nom_joueur = user_data["name"]
         
-    if st.button("Se déconnecter"):
+        st.write(f"👤 **Connecté : {nom_joueur}**")
+        st.divider()
+        
+        # --- CALCULS À LA VOLÉE POUR LA SIDEBAR ---
+        # 1. Classements globaux
+        all_players_elo = sorted(db["players"].keys(), key=lambda x: db["players"][x]["elo"], reverse=True)
+        all_players_prono = sorted(db["players"].keys(), key=lambda x: db["players"][x].get("prono_points", 0), reverse=True)
+        
+        rank_elo = all_players_elo.index(uid) + 1
+        rank_prono = all_players_prono.index(uid) + 1
+        total_players = len(db["players"])
+        
+        # 2. Statistiques individuelles
+        pts_prono = user_data.get("prono_points", 0)
+        user_elo = int(user_data["elo"])
+        played = user_data["stats_played"]
+        won = user_data["stats_won"]
+        
+        completed_matches = [m for m in db["matches"].values() if m["status"] == "completed"]
+        user_matches = [m for m in completed_matches if m["p1"] == uid or m["p2"] == uid]
+        user_matches.sort(key=lambda x: x["datetime"], reverse=True)
+        
+        draws = len([m for m in user_matches if m["winner"] == "draw"])
+        losses = played - won - draws
+        
+        # --- AFFICHAGE SIDEBAR ---
+        st.markdown("#### 🎯 Pronostics")
+        st.write(f"**Points :** {pts_prono}")
+        st.write(f"**Classement :** {rank_prono} / {total_players}")
+        
+        st.markdown("#### 🏆 Score ELO")
+        st.write(f"**Points :** {user_elo}")
+        st.write(f"**Classement :** {rank_elo} / {total_players}")
+        
+        st.markdown("#### 🎾 Mes Matchs")
+        st.write(f"**Joués :** {played}")
+        col_v, col_n, col_d = st.columns(3)
+        with col_v:
+            st.markdown(f"<div style='text-align:center;'>✅<br><b>{won}</b></div>", unsafe_allow_html=True)
+        with col_n:
+            st.markdown(f"<div style='text-align:center;'>🤝<br><b>{draws}</b></div>", unsafe_allow_html=True)
+        with col_d:
+            st.markdown(f"<div style='text-align:center;'>❌<br><b>{losses}</b></div>", unsafe_allow_html=True)
+            
+        st.markdown("<br>#### 📅 Dernier résultat", unsafe_allow_html=True)
+        if user_matches:
+            last_m = user_matches[0]
+            dt_last = datetime.fromisoformat(last_m["datetime"]).strftime('%d/%m/%Y')
+            opp_id = last_m["p2"] if last_m["p1"] == uid else last_m["p1"]
+            opp_name = db["players"][opp_id]["name"]
+            
+            if last_m["winner"] == "draw":
+                res_txt = "Match Nul 🤝"
+                res_col = "#9CA3AF" # Gris
+            elif last_m["winner"] == uid:
+                res_txt = "Victoire ✅"
+                res_col = "#10B981" # Vert
+            else:
+                res_txt = "Défaite ❌"
+                res_col = "#EF4444" # Rouge
+                
+            st.markdown(f"""
+            <div style="background-color: rgba(255,255,255,0.05); padding: 12px; border-radius: 8px; border-left: 4px solid {res_col};">
+                <p style="margin:0; font-size: 13px; color: #9CA3AF;">{dt_last}</p>
+                <p style="margin:5px 0; font-weight: bold; font-size: 15px;">🆚 {opp_name}</p>
+                <p style="margin:0; color: {res_col}; font-weight: bold;">{res_txt}</p>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.info("Aucun match joué")
+            
+        st.divider()
+
+    # Bouton de déconnexion pour tous
+    if st.button("Se déconnecter", use_container_width=True):
         st.session_state.user_id = None
         st.session_state.is_admin = False
         cookie_controller.remove("user_id")
         cookie_controller.remove("is_admin")
         st.rerun()
-
-# --- INTERFACE ADMINISTRATEUR GLOBALE ---
-if st.session_state.is_admin:
-    st.title("⚙️ Panneau d'Administration")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("Ajouter un joueur")
-        new_name = st.text_input("Nom du joueur")
-        new_pwd = st.text_input("Mot de passe du joueur")
-        if st.button("Créer le joueur"):
-            if new_name and new_pwd:
-                uid = str(uuid.uuid4())
-                db["players"][uid] = {
-                    "name": new_name, "password": new_pwd, "elo": 1000.0,
-                    "prono_points": 0, "stats_played": 0, "stats_won": 0
-                }
-                save_db(db)
-                st.success(f"Joueur {new_name} créé !")
-                st.rerun()
-                
-    with col2:
-        st.subheader("Modifier / Supprimer un joueur")
-        if db["players"]:
-            sorted_player_ids = sorted(list(db["players"].keys()), key=lambda x: db["players"][x]["name"].lower())
-            p_to_edit = st.selectbox("Sélectionner un joueur", sorted_player_ids, format_func=lambda x: db["players"][x]["name"])
-            new_p_name = st.text_input("Nouveau nom", value=db["players"][p_to_edit]["name"])
-            new_p_pwd = st.text_input("Nouveau mot de passe", value=db["players"][p_to_edit]["password"])
-            if st.button("Mettre à jour"):
-                db["players"][p_to_edit]["name"] = new_p_name
-                db["players"][p_to_edit]["password"] = new_p_pwd
-                save_db(db)
-                st.success("Mise à jour réussie !")
-                st.rerun()
-    st.stop()
 
 # --- INTERFACE JOUEUR PRINCIPALE ---
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🏆 Classement ELO", "📅 Matchs & Pronos", "🎯 Classement Pronos", "📜 Historique", "📊 Dashboard", "🛠️ Admin Matchs"])
@@ -241,19 +281,16 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🏆 Classement ELO", "📅 Match
 with tab1:
     st.header("🏆 Classement ELO des Joueurs")
     
-    # On récupère les paires (ID_joueur, Données) pour pouvoir chercher dans l'historique
     players_items = list(db["players"].items())
     players_items.sort(key=lambda x: x[1]["elo"], reverse=True)
     
     if not players_items:
         st.info("Aucun joueur n'est inscrit pour le moment.")
     else:
-        # On charge tous les matchs complétés pour le calcul à la volée
         completed_matches = [m for m in db["matches"].values() if m["status"] == "completed"]
         
         df_data = []
         for i, (pid, p) in enumerate(players_items, 1):
-            # Calculs à la volée (ne modifie pas le JSON)
             draws = len([m for m in completed_matches if m["winner"] == "draw" and (m["p1"] == pid or m["p2"] == pid)])
             losses = p["stats_played"] - p["stats_won"] - draws
             win_rate = (p["stats_won"] / p["stats_played"] * 100) if p["stats_played"] > 0 else 0
