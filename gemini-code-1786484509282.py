@@ -6,8 +6,8 @@ import streamlit as st
 import pandas as pd
 
 # --- CONFIGURATION ---
-DATA_FILE = "joueurs_v3.json"  # Conserve le fichier existant pour ne pas perdre les données
-ADMIN_PWD = "admin"  # Mot de passe administrateur par défaut
+DATA_FILE = "joueurs_v3.json"  # Fichier conservé, aucune donnée ne sera perdue !
+ADMIN_PWD = "Admin2026"  # Nouveau mot de passe administrateur
 
 # --- GESTION DE LA BASE DE DONNÉES (JSON) ---
 def init_db():
@@ -28,7 +28,7 @@ def save_db(db):
     with open(DATA_FILE, "w") as f:
         json.dump(db, f, indent=4)
 
-# --- FONCTIONS MATHÉMATIQUES & ELO ---
+# --- FONCTIONS MATHÉMATIQUES, ELO & RECALCUL ---
 def get_prob(elo_a, elo_b):
     return 1 / (1 + 10 ** ((elo_b - elo_a) / 400))
 
@@ -42,6 +42,56 @@ def get_probs_with_draw(elo_a, elo_b):
 
 def get_odds(prob):
     return round(1 / prob, 2) if prob > 0 else 1.01
+
+def recalculate_all_stats(db):
+    """Recalcule intégralement l'ELO et les pronos de tous les joueurs en rejouant l'historique chronologique."""
+    # 1. Remise à zéro des statistiques calculables
+    for pid in db["players"]:
+        db["players"][pid]["elo"] = 1000.0
+        db["players"][pid]["prono_points"] = 0
+        db["players"][pid]["stats_played"] = 0
+        db["players"][pid]["stats_won"] = 0
+
+    # 2. Récupérer et trier les matchs terminés par ordre chronologique
+    completed_matches = [m for m in db["matches"].values() if m["status"] == "completed"]
+    completed_matches.sort(key=lambda x: x["datetime"])
+
+    # 3. Rejouer mathématiquement chaque match
+    for m in completed_matches:
+        p1 = m["p1"]
+        p2 = m["p2"]
+        winner = m["winner"]
+        
+        elo_p1 = db["players"][p1]["elo"]
+        elo_p2 = db["players"][p2]["elo"]
+        
+        p_1_raw = get_prob(elo_p1, elo_p2)
+        p_2_raw = 1 - p_1_raw
+        
+        K = 32
+        if winner == p1:
+            score_p1, score_p2 = 1, 0
+            db["players"][p1]["stats_won"] += 1
+        elif winner == p2:
+            score_p1, score_p2 = 0, 1
+            db["players"][p2]["stats_won"] += 1
+        else: 
+            score_p1, score_p2 = 0.5, 0.5
+            
+        gain_elo_p1 = K * (score_p1 - p_1_raw)
+        gain_elo_p2 = K * (score_p2 - p_2_raw)
+        
+        db["players"][p1]["elo"] += gain_elo_p1
+        db["players"][p2]["elo"] += gain_elo_p2
+        db["players"][p1]["stats_played"] += 1
+        db["players"][p2]["stats_played"] += 1
+        
+        # Recalcul des pronos
+        for bet in m.get("bets", []):
+            if bet["predicted"] == winner:
+                points_gained = int(bet["odds"] * 10)
+                db["players"][bet["bettor"]]["prono_points"] += points_gained
+
 
 # --- INITIALISATION SESSION ---
 db = init_db()
@@ -61,7 +111,9 @@ if st.session_state.user_id is None and not st.session_state.is_admin:
             st.info("Aucun joueur n'est inscrit. Connectez-vous en tant qu'administrateur pour en créer.")
         else:
             player_names = {p_id: p_data["name"] for p_id, p_data in db["players"].items()}
-            selected_name = st.selectbox("Qui êtes-vous ?", list(player_names.values()))
+            # Ordre alphabétique pour la sélection du joueur
+            sorted_names = sorted(list(player_names.values()), key=lambda x: x.lower())
+            selected_name = st.selectbox("Qui êtes-vous ?", sorted_names)
             pwd = st.text_input("Mot de passe", type="password", key="pwd_player")
             
             if st.button("Se connecter"):
@@ -86,7 +138,7 @@ if st.session_state.user_id is None and not st.session_state.is_admin:
 # --- BARRE LATÉRALE (DÉCONNEXION) ---
 with st.sidebar:
     if st.session_state.is_admin:
-        st.write("👤 **Connecté en tant que : ADMIN**")
+        st.write("👤 **Connecté en tant que : ADMIN GLOBALE**")
     else:
         nom_joueur = db["players"][st.session_state.user_id]["name"]
         st.write(f"👤 **Connecté : {nom_joueur}**")
@@ -98,7 +150,7 @@ with st.sidebar:
         st.session_state.is_admin = False
         st.rerun()
 
-# --- INTERFACE ADMINISTRATEUR ---
+# --- INTERFACE ADMINISTRATEUR GLOBALE ---
 if st.session_state.is_admin:
     st.title("⚙️ Panneau d'Administration")
     col1, col2 = st.columns(2)
@@ -122,9 +174,11 @@ if st.session_state.is_admin:
                 st.rerun()
                 
     with col2:
-        st.subheader("Modifier / Supprimer")
+        st.subheader("Modifier / Supprimer un joueur")
         if db["players"]:
-            p_to_edit = st.selectbox("Sélectionner un joueur", list(db["players"].keys()), format_func=lambda x: db["players"][x]["name"])
+            # Ordre alphabétique pour la modification de joueur
+            sorted_player_ids = sorted(list(db["players"].keys()), key=lambda x: db["players"][x]["name"].lower())
+            p_to_edit = st.selectbox("Sélectionner un joueur", sorted_player_ids, format_func=lambda x: db["players"][x]["name"])
             new_p_name = st.text_input("Nouveau nom", value=db["players"][p_to_edit]["name"])
             new_p_pwd = st.text_input("Nouveau mot de passe", value=db["players"][p_to_edit]["password"])
             if st.button("Mettre à jour"):
@@ -136,7 +190,7 @@ if st.session_state.is_admin:
     st.stop()
 
 # --- INTERFACE JOUEUR PRINCIPALE ---
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏆 Classement ELO", "📅 Matchs & Pronos", "🎯 Classement Pronos", "📜 Historique", "📊 Dashboard"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🏆 Classement ELO", "📅 Matchs & Pronos", "🎯 Classement Pronos", "📜 Historique", "📊 Dashboard", "🛠️ Admin Matchs"])
 
 # --- TAB 1 : CLASSEMENT ELO VISUEL ---
 with tab1:
@@ -194,12 +248,15 @@ with tab2:
     
     with st.expander("➕ Créer un nouveau match", expanded=False):
         c1, c2 = st.columns(2)
-        all_players = list(db["players"].keys())
+        # Liste triée alphabétiquement
+        all_players_sorted = sorted(list(db["players"].keys()), key=lambda x: db["players"][x]["name"].lower())
+        
         with c1:
-            p1 = st.selectbox("Joueur 1", all_players, format_func=lambda x: db["players"][x]["name"])
+            p1 = st.selectbox("Joueur 1", all_players_sorted, format_func=lambda x: db["players"][x]["name"])
             d = st.date_input("Date du match")
         with c2:
-            p2 = st.selectbox("Joueur 2", [p for p in all_players if p != p1], format_func=lambda x: db["players"][x]["name"])
+            p2_options = [p for p in all_players_sorted if p != p1]
+            p2 = st.selectbox("Joueur 2", p2_options, format_func=lambda x: db["players"][x]["name"])
             t = st.time_input("Heure du match")
             
         if st.button("Programmer le match"):
@@ -221,6 +278,9 @@ with tab2:
     st.subheader("🔥 Matchs à venir & Pronostics de la communauté")
     
     pending_matches = {k: v for k, v in db["matches"].items() if v["status"] == "pending"}
+    # Tri des matchs en attente par date
+    pending_matches = dict(sorted(pending_matches.items(), key=lambda item: item[1]["datetime"]))
+    
     if not pending_matches:
         st.info("Aucun match prévu pour le moment.")
         
@@ -238,23 +298,18 @@ with tab2:
         st.caption(f"🕒 Prévu le {dt.strftime('%d/%m/%Y à %H:%M')}")
         st.write(f"Cotes indicatives : **{name1} ({odds_p1})** | **Nul ({odds_draw})** | **{name2} ({odds_p2})**")
         
-        # --- BLOC VISUEL : Qui a parié sur quoi ? ---
         st.markdown("#### 👥 Pronostics enregistrés :")
         if m["bets"]:
             cols_bets = st.columns(len(m["bets"]))
-            for idx, bet in enumerate(m["bets"]):
+            # Tri alphabétique des pronostiqueurs pour affichage
+            sorted_bets = sorted(m["bets"], key=lambda b: db["players"][b["bettor"]]["name"].lower())
+            for idx, bet in enumerate(sorted_bets):
                 bettor_name = db["players"][bet["bettor"]]["name"]
                 pred_val = bet["predicted"]
                 
-                if pred_val == "draw":
-                    choice_text = "Match Nul 🤝"
-                    badge_color = "orange"
-                elif pred_val == m["p1"]:
-                    choice_text = f"Victoire {name1}"
-                    badge_color = "green"
-                else:
-                    choice_text = f"Victoire {name2}"
-                    badge_color = "blue"
+                if pred_val == "draw": choice_text = "Match Nul 🤝"
+                elif pred_val == m["p1"]: choice_text = f"Victoire {name1}"
+                else: choice_text = f"Victoire {name2}"
                 
                 with cols_bets[idx % len(cols_bets)]:
                     st.info(f"**{bettor_name}**\n\n🎯 *{choice_text}*\n\n📈 Cote : {bet['odds']}")
@@ -283,9 +338,7 @@ with tab2:
                     elif pred == m["p2"]: odds_locked = odds_p2
                     else: odds_locked = odds_draw
                     
-                    # On retire l'ancien prono si l'utilisateur en avait déjà mis un
                     m["bets"] = [b for b in m["bets"] if b["bettor"] != st.session_state.user_id]
-                    
                     m["bets"].append({
                         "bettor": st.session_state.user_id,
                         "predicted": pred,
@@ -300,55 +353,25 @@ with tab2:
             winner = st.radio("Résultat final", list(options_result.keys()), format_func=lambda x: options_result[x], key=f"win_{m_id}")
             
             if st.button("Valider le résultat et distribuer les points", key=f"btn_{m_id}"):
-                elo_p1 = db["players"][m["p1"]]["elo"]
-                elo_p2 = db["players"][m["p2"]]["elo"]
-                p_1_raw = get_prob(elo_p1, elo_p2)
-                p_2_raw = 1 - p_1_raw
-                
-                K = 32
-                if winner == m["p1"]:
-                    score_p1, score_p2 = 1, 0
-                    db["players"][m["p1"]]["stats_won"] += 1
-                elif winner == m["p2"]:
-                    score_p1, score_p2 = 0, 1
-                    db["players"][m["p2"]]["stats_won"] += 1
-                else: 
-                    score_p1, score_p2 = 0.5, 0.5
-                    
-                gain_elo_p1 = K * (score_p1 - p_1_raw)
-                gain_elo_p2 = K * (score_p2 - p_2_raw)
-                
-                db["players"][m["p1"]]["elo"] += gain_elo_p1
-                db["players"][m["p2"]]["elo"] += gain_elo_p2
-                db["players"][m["p1"]]["stats_played"] += 1
-                db["players"][m["p2"]]["stats_played"] += 1
-                
-                # Distribution des points de pronostic (Façon MonPetitProno)
-                for bet in m["bets"]:
-                    if bet["predicted"] == winner:
-                        points_gained = int(bet["odds"] * 10)
-                        if "prono_points" not in db["players"][bet["bettor"]]:
-                            db["players"][bet["bettor"]]["prono_points"] = 0
-                        db["players"][bet["bettor"]]["prono_points"] += points_gained
-                
                 m["status"] = "completed"
                 m["winner"] = winner
                 
                 if winner == "draw":
-                    desc = f"🤝 Match Nul entre {name1} et {name2} (Évol. ELO: {name1} {gain_elo_p1:+.0f}, {name2} {gain_elo_p2:+.0f})"
+                    desc = f"🤝 Match Nul entre {name1} et {name2} a été enregistré."
                 else:
                     w_name = name1 if winner == m["p1"] else name2
                     l_name = name2 if winner == m["p1"] else name1
-                    gain = gain_elo_p1 if winner == m["p1"] else gain_elo_p2
-                    desc = f"🏆 {w_name} a battu {l_name} ({int(gain):+d} ELO)"
+                    desc = f"🏆 {w_name} a battu {l_name}."
                     
                 db["history"].append({
                     "date": datetime.now().isoformat(),
                     "desc": desc
                 })
                 
+                # Au lieu de calculer uniquement pour ce match, on recalcule tout pour s'assurer que le système est robuste
+                recalculate_all_stats(db)
                 save_db(db)
-                st.success("Match terminé et points de pronos distribués !")
+                st.success("Match terminé et points distribués !")
                 st.rerun()
         st.divider()
 
@@ -451,3 +474,122 @@ with tab5:
             st.bar_chart(df_charts["Taux de Victoire (%)"], color="#2196F3")
     else:
         st.info("Ajoutez des joueurs et jouez des matchs pour voir les statistiques apparaître !")
+
+# --- TAB 6 : ACCÈS ADMIN MATCHS (Intégré interface Joueur) ---
+with tab6:
+    st.header("🛠️ Gestion Administrateur des Matchs")
+    st.info("Cette section est réservée pour corriger des erreurs (dates, résultats, suppressions).")
+    
+    admin_match_pass = st.text_input("Mot de passe Admin", type="password", key="pwd_admin_match")
+    
+    if admin_match_pass == ADMIN_PWD:
+        st.success("Accès administrateur déverrouillé.")
+        
+        def format_match_label(m_id):
+            m = db["matches"][m_id]
+            p1_name = db["players"][m["p1"]]["name"]
+            p2_name = db["players"][m["p2"]]["name"]
+            dt = datetime.fromisoformat(m["datetime"]).strftime('%d/%m/%Y %H:%M')
+            return f"[{dt}] - {p1_name} vs {p2_name}"
+            
+        st.subheader("⏳ Matchs en attente (Non joués)")
+        pending_ids = [m_id for m_id, m in db["matches"].items() if m["status"] == "pending"]
+        pending_ids.sort(key=lambda x: db["matches"][x]["datetime"])
+        
+        if pending_ids:
+            sel_p_id = st.selectbox("Sélectionner un match en attente", pending_ids, format_func=format_match_label)
+            if sel_p_id:
+                mp = db["matches"][sel_p_id]
+                dt_obj_p = datetime.fromisoformat(mp["datetime"])
+                
+                col_dp1, col_dp2 = st.columns(2)
+                with col_dp1:
+                    new_dp = st.date_input("Nouvelle date", dt_obj_p.date(), key=f"dp_{sel_p_id}")
+                with col_dp2:
+                    new_tp = st.time_input("Nouvelle heure", dt_obj_p.time(), key=f"tp_{sel_p_id}")
+                
+                col_btn_p1, col_btn_p2 = st.columns(2)
+                with col_btn_p1:
+                    if st.button("Modifier la date", key=f"btn_update_p_{sel_p_id}"):
+                        mp["datetime"] = datetime.combine(new_dp, new_tp).isoformat()
+                        save_db(db)
+                        st.success("Date du match mise à jour !")
+                        st.rerun()
+                with col_btn_p2:
+                    if st.button("🗑️ Supprimer ce match", key=f"btn_del_p_{sel_p_id}"):
+                        del db["matches"][sel_p_id]
+                        save_db(db)
+                        st.success("Match supprimé !")
+                        st.rerun()
+        else:
+            st.write("Aucun match en attente.")
+            
+        st.divider()
+        
+        st.subheader("🏁 Matchs terminés (Joués)")
+        completed_ids = [m_id for m_id, m in db["matches"].items() if m["status"] == "completed"]
+        # Trier par date chronologique inversée pour l'affichage
+        completed_ids.sort(key=lambda x: db["matches"][x]["datetime"], reverse=True)
+        
+        if completed_ids:
+            sel_c_id = st.selectbox("Sélectionner un match terminé", completed_ids, format_func=format_match_label)
+            if sel_c_id:
+                mc = db["matches"][sel_c_id]
+                dt_obj_c = datetime.fromisoformat(mc["datetime"])
+                
+                col_dc1, col_dc2 = st.columns(2)
+                with col_dc1:
+                    new_dc = st.date_input("Nouvelle date", dt_obj_c.date(), key=f"dc_{sel_c_id}")
+                with col_dc2:
+                    new_tc = st.time_input("Nouvelle heure", dt_obj_c.time(), key=f"tc_{sel_c_id}")
+                
+                options_result = {
+                    mc["p1"]: f"Victoire {db['players'][mc['p1']]['name']}", 
+                    "draw": "Match Nul", 
+                    mc["p2"]: f"Victoire {db['players'][mc['p2']]['name']}"
+                }
+                
+                idx_winner = list(options_result.keys()).index(mc["winner"])
+                new_winner = st.radio(
+                    "Modifier le résultat", 
+                    list(options_result.keys()), 
+                    format_func=lambda x: options_result[x], 
+                    index=idx_winner, 
+                    key=f"res_{sel_c_id}"
+                )
+                
+                st.warning("⚠️ Toute modification entraînera un recalcul automatique de l'historique ELO et des points de pronostics.")
+                
+                col_btn_c1, col_btn_c2 = st.columns(2)
+                with col_btn_c1:
+                    if st.button("Sauvegarder les modifications et recalculer", key=f"btn_update_c_{sel_c_id}"):
+                        mc["datetime"] = datetime.combine(new_dc, new_tc).isoformat()
+                        mc["winner"] = new_winner
+                        
+                        db["history"].append({
+                            "date": datetime.now().isoformat(),
+                            "desc": f"⚠️ Admin a modifié un ancien match (nouveau résultat/date enregistré) - Classement recalculé."
+                        })
+                        
+                        recalculate_all_stats(db)
+                        save_db(db)
+                        st.success("Match mis à jour et classements recalculés avec succès !")
+                        st.rerun()
+                with col_btn_c2:
+                    if st.button("🗑️ Supprimer ce match et recalculer", key=f"btn_del_c_{sel_c_id}"):
+                        del db["matches"][sel_c_id]
+                        
+                        db["history"].append({
+                            "date": datetime.now().isoformat(),
+                            "desc": f"⚠️ Admin a supprimé un ancien match - Classement recalculé."
+                        })
+                        
+                        recalculate_all_stats(db)
+                        save_db(db)
+                        st.success("Match supprimé et classements recalculés avec succès !")
+                        st.rerun()
+        else:
+            st.write("Aucun match terminé.")
+
+    elif admin_match_pass:
+        st.error("Mot de passe incorrect.")
