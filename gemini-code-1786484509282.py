@@ -280,33 +280,34 @@ with tab1:
 
         if not df_hist.empty:
             # Construction du graphique Plotly interactif
-            fig = px.line(
-                df_hist, x="Date", y="ELO", color="Joueur", markers=True,
-                hover_data={"Date": "|%d/%m/%Y %H:%M", "Matchs": True, "Victoires": True, "Ratio": ":.1f"}
-            )
-            
-            fig.update_traces(
-                mode="lines+markers",
-                line=dict(width=3), marker=dict(size=6),
-                hovertemplate="<b>%{fullData.name}</b><br>ELO: %{y:.0f}<br>Matchs joués: %{customdata[0]}<br>Victoires: %{customdata[1]}<br>Ratio: %{customdata[2]:.1f}%<extra></extra>"
-            )
-            
-            fig.update_layout(
-                hovermode="x unified", # Gère parfaitement les chevauchements en groupant les infos par date !
-                legend_title="Joueurs",
-                xaxis_title="",
-                yaxis_title="Score ELO",
-                margin=dict(l=0, r=0, t=30, b=0),
-                plot_bgcolor="rgba(0,0,0,0)",
-                paper_bgcolor="rgba(0,0,0,0)",
-                hoverlabel=dict(bgcolor="rgba(30, 30, 30, 0.9)", font_size=13)
-            )
-            
-            # Grilles discrètes
-            fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(255,255,255,0.1)')
-            fig.update_xaxes(showgrid=False)
+fig = px.line(
+    df_hist, x="Date", y="ELO", color="Joueur", markers=True,
+    hover_data={"Date": "|%d/%m/%Y %H:%M", "Matchs": True, "Victoires": True, "Ratio": ":.1f"}
+)
 
-            st.plotly_chart(fig, use_container_width=True)
+fig.update_traces(
+    mode="lines+markers",
+    line=dict(width=3), 
+    marker=dict(size=6),
+    # Affichage propre au survol individuel d'un point
+    hovertemplate="<b>%{fullData.name}</b><br>Score ELO: <b>%{y:.0f} pts</b><br>Matchs joués: %{customdata[0]}<br>Victoires: %{customdata[1]}<br>Ratio: %{customdata[2]:.1f}%<extra></extra>"
+)
+
+fig.update_layout(
+    hovermode="closest", # 🎯 Ne montre QUE les infos du joueur/point survolé !
+    legend_title="Joueurs",
+    xaxis_title="",
+    yaxis_title="Score ELO",
+    margin=dict(l=0, r=0, t=30, b=0),
+    plot_bgcolor="rgba(0,0,0,0)",
+    paper_bgcolor="rgba(0,0,0,0)"
+)
+
+# Grilles discrètes
+fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(255,255,255,0.1)')
+fig.update_xaxes(showgrid=False)
+
+st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Aucune donnée disponible pour cette période.")
 
