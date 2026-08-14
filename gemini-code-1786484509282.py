@@ -270,8 +270,19 @@ with st.sidebar:
     if st.button("Se déconnecter", use_container_width=True):
         st.session_state.user_id = None
         st.session_state.is_admin = False
-        cookie_controller.remove("user_id")
-        cookie_controller.remove("is_admin")
+        
+        # On essaie de supprimer le cookie joueur s'il existe
+        try:
+            cookie_controller.remove("user_id")
+        except KeyError:
+            pass
+            
+        # On essaie de supprimer le cookie admin s'il existe
+        try:
+            cookie_controller.remove("is_admin")
+        except KeyError:
+            pass
+            
         st.rerun()
 
 # --- INTERFACE JOUEUR PRINCIPALE ---
