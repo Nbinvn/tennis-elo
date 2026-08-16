@@ -15,8 +15,8 @@ ADMIN_PWD = "Admin2026"
 # --- GESTION DE LA BASE DE DONNÉES (CLOUD) ---
 
 # On récupère les clés depuis les secrets Streamlit
-JSONBIN_ID = st.secrets["6a823c7cda38895dfeecbde8"]
-JSONBIN_KEY = st.secrets["$2a$10$zXh/GVbjDl2EIJ1nFyl/Eeyf7PZ/K9nOHILwYvyoDdglml2GTYHye "]
+JSONBIN_ID = st.secrets["JSONBIN_ID"]
+JSONBIN_KEY = st.secrets["JSONBIN_KEY"]
 JSONBIN_URL = f"https://api.jsonbin.io/v3/b/6a823c7cda38895dfeecbde8"
 HEADERS = {
     "X-Master-Key": JSONBIN_KEY,
