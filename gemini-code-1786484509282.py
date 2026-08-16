@@ -177,6 +177,8 @@ def get_elo_history_df(db):
         
     df = pd.DataFrame(records)
     df["Ratio"] = (df["Victoires"] / df["Matchs"] * 100).fillna(0)
+    # Tri du dataframe final pour s'assurer que la légende soit toujours classée alphabétiquement
+    df = df.sort_values(by=["Joueur", "Date"], key=lambda col: col.str.lower() if col.name == "Joueur" else col)
     return df
 
 # --- INITIALISATION SESSION & COOKIES ---
@@ -240,8 +242,9 @@ with st.sidebar:
         st.write(f"👤 **Connecté : {nom_joueur}**")
         st.divider()
         
-        all_players_elo = sorted(db["players"].keys(), key=lambda x: db["players"][x]["elo"], reverse=True)
-        all_players_prono = sorted(db["players"].keys(), key=lambda x: db["players"][x].get("prono_points", 0), reverse=True)
+        # Tris mis à jour : en cas d'égalité (ELO ou Points Pronos), on départage par l'ordre alphabétique
+        all_players_elo = sorted(db["players"].keys(), key=lambda x: (-db["players"][x]["elo"], db["players"][x]["name"].lower()))
+        all_players_prono = sorted(db["players"].keys(), key=lambda x: (-db["players"][x].get("prono_points", 0), db["players"][x]["name"].lower()))
         
         rank_elo = all_players_elo.index(uid) + 1
         rank_prono = all_players_prono.index(uid) + 1
@@ -295,7 +298,9 @@ with st.sidebar:
                 else:
                     opp_team = last_m["t1"]
                     is_win = (last_m["winner"] == "t2")
-                opp_name = f"{db['players'][opp_team[0]]['name']} & {db['players'][opp_team[1]]['name']}"
+                # Affichage des noms de l'équipe adverse par ordre alphabétique
+                opp_names = sorted([db['players'][opp_team[0]]['name'], db['players'][opp_team[1]]['name']], key=str.lower)
+                opp_name = " & ".join(opp_names)
 
             if last_m["winner"] == "draw":
                 res_txt, res_col = "Match Nul 🤝", "#9CA3AF"
@@ -331,7 +336,8 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🏆 Classement ELO", "📅 Match
 with tab1:
     st.header("🏆 Classement ELO des Joueurs")
     players_items = list(db["players"].items())
-    players_items.sort(key=lambda x: x[1]["elo"], reverse=True)
+    # Tri ELO décroissant, en cas d'égalité tri par ordre alphabétique du nom
+    players_items.sort(key=lambda x: (-x[1]["elo"], x[1]["name"].lower()))
     
     if not players_items:
         st.info("Aucun joueur n'est inscrit.")
@@ -450,8 +456,11 @@ with tab2:
             opt_1, opt_2 = m["p1"], m["p2"]
             is_playing = st.session_state.user_id in [m["p1"], m["p2"]]
         else:
-            name1 = f"{db['players'][m['t1'][0]]['name']} & {db['players'][m['t1'][1]]['name']}"
-            name2 = f"{db['players'][m['t2'][0]]['name']} & {db['players'][m['t2'][1]]['name']}"
+            team1_names = sorted([db['players'][pid]['name'] for pid in m['t1']], key=str.lower)
+            team2_names = sorted([db['players'][pid]['name'] for pid in m['t2']], key=str.lower)
+            name1 = " & ".join(team1_names)
+            name2 = " & ".join(team2_names)
+            
             elo_1 = (db["players"][m["t1"][0]]["elo"] + db["players"][m["t1"][1]]["elo"]) / 2
             elo_2 = (db["players"][m["t2"][0]]["elo"] + db["players"][m["t2"][1]]["elo"]) / 2
             opt_1, opt_2 = "t1", "t2"
@@ -468,6 +477,7 @@ with tab2:
         st.markdown("#### 👥 Pronostics enregistrés :")
         if m["bets"]:
             cols_bets = st.columns(len(m["bets"]))
+            # Les pronostics des joueurs sont listés par ordre alphabétique
             for idx, bet in enumerate(sorted(m["bets"], key=lambda b: db["players"][b["bettor"]]["name"].lower())):
                 b_name = db["players"][bet["bettor"]]["name"]
                 if bet["predicted"] == "draw": c_text = "Match Nul 🤝"
@@ -526,7 +536,9 @@ with tab3:
                 if bet["predicted"] == m["winner"]:
                     recent_prono_gains[bet["bettor"]] += int(bet["odds"] * 10)
 
-    players_prono = sorted(list(db["players"].items()), key=lambda x: x[1].get("prono_points", 0), reverse=True)
+    # Tri par points de pronostics, en cas d'égalité par ordre alphabétique
+    players_prono = sorted(list(db["players"].items()), key=lambda x: (-x[1].get("prono_points", 0), x[1]["name"].lower()))
+    
     if not players_prono:
         st.info("Aucun joueur inscrit.")
     else:
@@ -579,8 +591,9 @@ with tab4:
             n1, n2 = db["players"][m["p1"]]["name"], db["players"][m["p2"]]["name"]
             opt1 = m["p1"]
         else:
-            n1 = f"{db['players'][m['t1'][0]]['name']} & {db['players'][m['t1'][1]]['name']}"
-            n2 = f"{db['players'][m['t2'][0]]['name']} & {db['players'][m['t2'][1]]['name']}"
+            team1_names = sorted([db['players'][pid]['name'] for pid in m['t1']], key=str.lower)
+            team2_names = sorted([db['players'][pid]['name'] for pid in m['t2']], key=str.lower)
+            n1, n2 = " & ".join(team1_names), " & ".join(team2_names)
             opt1 = "t1"
             
         if m["winner"] == "draw":
@@ -596,15 +609,20 @@ with tab5:
     if db["players"]:
         cols = st.columns(2)
         max_prono = max([p.get("prono_points", 0) for p in db["players"].values()], default=0)
-        rois = [p["name"] for p in db["players"].values() if p.get("prono_points", 0) == max_prono]
+        rois = sorted([p["name"] for p in db["players"].values() if p.get("prono_points", 0) == max_prono], key=str.lower)
+        
         max_active = max([p["stats_played"] for p in db["players"].values()], default=0)
-        actifs = [p["name"] for p in db["players"].values() if p["stats_played"] == max_active]
+        actifs = sorted([p["name"] for p in db["players"].values() if p["stats_played"] == max_active], key=str.lower)
         
         with cols[0]: st.metric(f"🎯 Rois des Pronos", f"{max_prono} pts", ", ".join(rois))
         with cols[1]: st.metric(f"🎾 Plus actifs", f"{max_active} matchs", ", ".join(actifs))
             
         st.divider()
         chart_data = [{"Joueur": p["name"], "Matchs Joués": p["stats_played"], "Taux de Victoire (%)": (p["stats_won"] / p["stats_played"] * 100) if p["stats_played"] > 0 else 0} for p in db["players"].values()]
+        
+        # Tri alphabétique des données pour les graphiques
+        chart_data.sort(key=lambda x: x["Joueur"].lower())
+        
         df_charts = pd.DataFrame(chart_data).set_index("Joueur")
         col_c1, col_c2 = st.columns(2)
         with col_c1: st.markdown("**Matchs joués**"); st.bar_chart(df_charts["Matchs Joués"], color="#4CAF50")
@@ -638,7 +656,9 @@ with tab6:
                         
         with tab_edit:
             if db["players"]:
-                edit_p_id = st.selectbox("Sélectionner un joueur", list(db["players"].keys()), format_func=lambda x: db["players"][x]["name"])
+                # Tri alphabétique du menu déroulant des joueurs
+                sorted_player_keys = sorted(list(db["players"].keys()), key=lambda k: db["players"][k]["name"].lower())
+                edit_p_id = st.selectbox("Sélectionner un joueur", sorted_player_keys, format_func=lambda x: db["players"][x]["name"])
                 edit_p_name = st.text_input("Nouveau nom", value=db["players"][edit_p_id]["name"])
                 edit_p_pwd = st.text_input("Nouveau mot de passe", value=db["players"][edit_p_id]["password"])
                 
@@ -672,7 +692,9 @@ with tab6:
             if m.get("type", "singles") == "singles":
                 return f"[{dt}] - {db['players'][m['p1']]['name']} vs {db['players'][m['p2']]['name']}"
             else:
-                return f"[{dt}] - 2v2 : {db['players'][m['t1'][0]]['name']} & {db['players'][m['t1'][1]]['name']} vs ..."
+                t1_names = " & ".join(sorted([db['players'][p]['name'] for p in m['t1']], key=str.lower))
+                t2_names = " & ".join(sorted([db['players'][p]['name'] for p in m['t2']], key=str.lower))
+                return f"[{dt}] - 2v2 : {t1_names} vs {t2_names}"
             
         pending_ids = [m_id for m_id, m in db["matches"].items() if m["status"] == "pending"]
         if pending_ids:
