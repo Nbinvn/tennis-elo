@@ -52,6 +52,49 @@ def get_probs_with_draw(elo_a, elo_b):
 def get_odds(prob):
     return round(1 / prob, 2) if prob > 0 else 1.01
 
+def get_match_odds_at_time(db, target_m_id):
+    """Calcule les cotes d'un match telles qu'elles étaient AVANT qu'il ne soit joué."""
+    temp_elos = {pid: 1000.0 for pid in db["players"]}
+    completed_matches = [(mid, m) for mid, m in db["matches"].items() if m["status"] == "completed"]
+    completed_matches.sort(key=lambda x: x[1]["datetime"])
+    
+    for mid, m in completed_matches:
+        if mid == target_m_id:
+            break # On s'arrête juste avant le match ciblé pour conserver les ELO d'avant-match
+        
+        match_type = m.get("type", "singles")
+        winner = m["winner"]
+        K = 32
+        
+        if match_type == "singles":
+            p1, p2 = m["p1"], m["p2"]
+            p_1_raw = get_prob(temp_elos[p1], temp_elos[p2])
+            if winner == p1: s1, s2 = 1, 0
+            elif winner == p2: s1, s2 = 0, 1
+            else: s1, s2 = 0.5, 0.5
+            temp_elos[p1] += K * (s1 - p_1_raw)
+            temp_elos[p2] += K * (s2 - (1 - p_1_raw))
+        else:
+            t1, t2 = m["t1"], m["t2"]
+            elo_t1 = (temp_elos[t1[0]] + temp_elos[t1[1]]) / 2
+            elo_t2 = (temp_elos[t2[0]] + temp_elos[t2[1]]) / 2
+            p_1_raw = get_prob(elo_t1, elo_t2)
+            if winner == "t1": s1, s2 = 1, 0
+            elif winner == "t2": s1, s2 = 0, 1
+            else: s1, s2 = 0.5, 0.5
+            for pid in t1: temp_elos[pid] += K * (s1 - p_1_raw)
+            for pid in t2: temp_elos[pid] += K * (s2 - (1 - p_1_raw))
+
+    m_target = db["matches"][target_m_id]
+    if m_target.get("type", "singles") == "singles":
+        elo_1, elo_2 = temp_elos[m_target["p1"]], temp_elos[m_target["p2"]]
+    else:
+        elo_1 = (temp_elos[m_target["t1"][0]] + temp_elos[m_target["t1"][1]]) / 2
+        elo_2 = (temp_elos[m_target["t2"][0]] + temp_elos[m_target["t2"][1]]) / 2
+        
+    prob_p1, prob_p2, prob_draw = get_probs_with_draw(elo_1, elo_2)
+    return get_odds(prob_p1), get_odds(prob_p2), get_odds(prob_draw)
+
 def recalculate_all_stats(db):
     for pid in db["players"]:
         db["players"][pid]["elo"] = 1000.0
@@ -177,7 +220,6 @@ def get_elo_history_df(db):
         
     df = pd.DataFrame(records)
     df["Ratio"] = (df["Victoires"] / df["Matchs"] * 100).fillna(0)
-    # Tri du dataframe final pour s'assurer que la légende soit toujours classée alphabétiquement
     df = df.sort_values(by=["Joueur", "Date"], key=lambda col: col.str.lower() if col.name == "Joueur" else col)
     return df
 
@@ -242,7 +284,6 @@ with st.sidebar:
         st.write(f"👤 **Connecté : {nom_joueur}**")
         st.divider()
         
-        # Tris mis à jour : en cas d'égalité (ELO ou Points Pronos), on départage par l'ordre alphabétique
         all_players_elo = sorted(db["players"].keys(), key=lambda x: (-db["players"][x]["elo"], db["players"][x]["name"].lower()))
         all_players_prono = sorted(db["players"].keys(), key=lambda x: (-db["players"][x].get("prono_points", 0), db["players"][x]["name"].lower()))
         
@@ -298,7 +339,6 @@ with st.sidebar:
                 else:
                     opp_team = last_m["t1"]
                     is_win = (last_m["winner"] == "t2")
-                # Affichage des noms de l'équipe adverse par ordre alphabétique
                 opp_names = sorted([db['players'][opp_team[0]]['name'], db['players'][opp_team[1]]['name']], key=str.lower)
                 opp_name = " & ".join(opp_names)
 
@@ -336,7 +376,6 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🏆 Classement ELO", "📅 Match
 with tab1:
     st.header("🏆 Classement ELO des Joueurs")
     players_items = list(db["players"].items())
-    # Tri ELO décroissant, en cas d'égalité tri par ordre alphabétique du nom
     players_items.sort(key=lambda x: (-x[1]["elo"], x[1]["name"].lower()))
     
     if not players_items:
@@ -477,7 +516,6 @@ with tab2:
         st.markdown("#### 👥 Pronostics enregistrés :")
         if m["bets"]:
             cols_bets = st.columns(len(m["bets"]))
-            # Les pronostics des joueurs sont listés par ordre alphabétique
             for idx, bet in enumerate(sorted(m["bets"], key=lambda b: db["players"][b["bettor"]]["name"].lower())):
                 b_name = db["players"][bet["bettor"]]["name"]
                 if bet["predicted"] == "draw": c_text = "Match Nul 🤝"
@@ -536,7 +574,6 @@ with tab3:
                 if bet["predicted"] == m["winner"]:
                     recent_prono_gains[bet["bettor"]] += int(bet["odds"] * 10)
 
-    # Tri par points de pronostics, en cas d'égalité par ordre alphabétique
     players_prono = sorted(list(db["players"].items()), key=lambda x: (-x[1].get("prono_points", 0), x[1]["name"].lower()))
     
     if not players_prono:
@@ -619,8 +656,6 @@ with tab5:
             
         st.divider()
         chart_data = [{"Joueur": p["name"], "Matchs Joués": p["stats_played"], "Taux de Victoire (%)": (p["stats_won"] / p["stats_played"] * 100) if p["stats_played"] > 0 else 0} for p in db["players"].values()]
-        
-        # Tri alphabétique des données pour les graphiques
         chart_data.sort(key=lambda x: x["Joueur"].lower())
         
         df_charts = pd.DataFrame(chart_data).set_index("Joueur")
@@ -656,7 +691,6 @@ with tab6:
                         
         with tab_edit:
             if db["players"]:
-                # Tri alphabétique du menu déroulant des joueurs
                 sorted_player_keys = sorted(list(db["players"].keys()), key=lambda k: db["players"][k]["name"].lower())
                 edit_p_id = st.selectbox("Sélectionner un joueur", sorted_player_keys, format_func=lambda x: db["players"][x]["name"])
                 edit_p_name = st.text_input("Nouveau nom", value=db["players"][edit_p_id]["name"])
@@ -732,5 +766,57 @@ with tab6:
                 del db["matches"][sel_c_id]
                 db["history"].append({"date": datetime.now().isoformat(), "desc": f"⚠️ Admin a supprimé un ancien match."})
                 recalculate_all_stats(db); save_db(db); st.rerun()
+                
+            st.divider()
+            st.markdown("#### 🎯 Ajouter un pronostic rétroactif")
+            
+            # Identifier les joueurs ayant déjà parié ou joué ce match
+            already_bet = [b["bettor"] for b in mc.get("bets", [])]
+            if mc.get("type", "singles") == "singles":
+                players_in_match = [mc["p1"], mc["p2"]]
+                opt_1_val, opt_2_val = mc["p1"], mc["p2"]
+                opt_1_label = f"Victoire {db['players'][mc['p1']]['name']}"
+                opt_2_label = f"Victoire {db['players'][mc['p2']]['name']}"
+            else:
+                players_in_match = mc["t1"] + mc["t2"]
+                opt_1_val, opt_2_val = "t1", "t2"
+                t1_names = " & ".join(sorted([db['players'][p]['name'] for p in mc['t1']], key=str.lower))
+                t2_names = " & ".join(sorted([db['players'][p]['name'] for p in mc['t2']], key=str.lower))
+                opt_1_label = f"Victoire {t1_names}"
+                opt_2_label = f"Victoire {t2_names}"
+                
+            eligible_bettors = [pid for pid in db["players"] if pid not in already_bet and pid not in players_in_match]
+            eligible_bettors.sort(key=lambda x: db["players"][x]["name"].lower())
+            
+            if eligible_bettors:
+                retro_bettor = st.selectbox("Sélectionner un joueur retardataire", eligible_bettors, format_func=lambda x: db["players"][x]["name"])
+                
+                # Récupérer les cotes au moment exact où le match a été joué
+                odds_1, odds_2, odds_d = get_match_odds_at_time(db, sel_c_id)
+                st.info(f"Cotes d'avant-match reconstituées : **{opt_1_label} ({odds_1})** | **Nul ({odds_d})** | **{opt_2_label} ({odds_2})**")
+                
+                retro_options = {
+                    opt_1_val: f"{opt_1_label} ({odds_1})",
+                    "draw": f"Match Nul ({odds_d})",
+                    opt_2_val: f"{opt_2_label} ({odds_2})"
+                }
+                
+                retro_pred = st.radio("Pronostic effectué par le joueur", list(retro_options.keys()), format_func=lambda x: retro_options[x])
+                
+                if st.button("Ajouter ce pronostic et recalculer les points"):
+                    retro_odds = odds_1 if retro_pred == opt_1_val else (odds_2 if retro_pred == opt_2_val else odds_d)
+                    if "bets" not in mc:
+                        mc["bets"] = []
+                    mc["bets"].append({
+                        "bettor": retro_bettor,
+                        "predicted": retro_pred,
+                        "odds": retro_odds
+                    })
+                    recalculate_all_stats(db)
+                    save_db(db)
+                    st.success("Pronostic ajouté avec succès ! Les points de tous les joueurs ont été mis à jour.")
+                    st.rerun()
+            else:
+                st.info("Tous les joueurs éligibles ont déjà pronostiqué ce match.")
     elif admin_match_pass:
         st.error("Mot de passe incorrect.")
