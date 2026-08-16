@@ -6,29 +6,43 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from streamlit_cookies_controller import CookieController
+import requests
 
 # --- CONFIGURATION ---
 DATA_FILE = "joueurs_v3.json"  # Fichier conservé, AUCUNE DONNÉE altérée.
 ADMIN_PWD = "Admin2026"
 
-# --- GESTION DE LA BASE DE DONNÉES (JSON) ---
+# --- GESTION DE LA BASE DE DONNÉES (CLOUD) ---
+
+# On récupère les clés depuis les secrets Streamlit
+JSONBIN_ID = st.secrets["6a823c7cda38895dfeecbde8"]
+JSONBIN_KEY = st.secrets["$2a$10$zXh/GVbjDl2EIJ1nFyl/Eeyf7PZ/K9nOHILwYvyoDdglml2GTYHye "]
+JSONBIN_URL = f"https://api.jsonbin.io/v3/b/6a823c7cda38895dfeecbde8"
+HEADERS = {
+    "X-Master-Key": JSONBIN_KEY,
+    "Content-Type": "application/json"
+}
+
 def init_db():
-    if not os.path.exists(DATA_FILE):
-        db = {
-            "players": {},
-            "matches": {},
-            "history": []
-        }
-        save_db(db)
+    # Avec JSONBin, la base est déjà initialisée en ligne, on a juste à la lire.
     return load_db()
 
 def load_db():
-    with open(DATA_FILE, "r") as f:
-        return json.load(f)
+    try:
+        response = requests.get(JSONBIN_URL, headers=HEADERS)
+        # JSONBin renvoie les données sous la clé "record"
+        return response.json()["record"]
+    except Exception as e:
+        st.error(f"Erreur lors du chargement de la base de données : {e}")
+        # Sécurité au cas où l'API est injoignable, pour ne pas faire planter l'app
+        return {"players": {}, "matches": {}, "history": []} 
 
 def save_db(db):
-    with open(DATA_FILE, "w") as f:
-        json.dump(db, f, indent=4)
+    try:
+        # On remplace le fichier en ligne par notre dictionnaire mis à jour
+        requests.put(JSONBIN_URL, json=db, headers=HEADERS)
+    except Exception as e:
+        st.error(f"Erreur lors de la sauvegarde : {e}")
 
 # --- FONCTIONS MATHÉMATIQUES, ELO & RECALCUL ---
 def get_prob(elo_a, elo_b):
