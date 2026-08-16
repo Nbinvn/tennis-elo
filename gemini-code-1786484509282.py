@@ -1,6 +1,7 @@
 import json
 import os
 import uuid
+import copy
 from datetime import datetime, timedelta
 import streamlit as st
 import pandas as pd
@@ -20,20 +21,20 @@ HEADERS = {
     "Content-Type": "application/json"
 }
 
-def init_db():
-    return load_db()
-
-def load_db():
+def fetch_remote_db():
+    """Récupère les données depuis JSONbin (1 requête GET)"""
     try:
         response = requests.get(JSONBIN_URL, headers=HEADERS)
         return response.json()["record"]
     except Exception as e:
-        st.error(f"Erreur lors du chargement de la base de données : {e}")
-        return {"players": {}, "matches": {}, "history": []} 
+        st.error(f"Erreur lors du chargement : {e}")
+        return {"players": {}, "matches": {}, "history": []}
 
-def save_db(db):
+def save_db(current_db):
+    """Sauvegarde vers JSONbin (1 requête PUT) et met à jour le cache"""
     try:
-        requests.put(JSONBIN_URL, json=db, headers=HEADERS)
+        requests.put(JSONBIN_URL, json=current_db, headers=HEADERS)
+        st.session_state.db = copy.deepcopy(current_db)
     except Exception as e:
         st.error(f"Erreur lors de la sauvegarde : {e}")
 
@@ -52,10 +53,10 @@ def get_probs_with_draw(elo_a, elo_b):
 def get_odds(prob):
     return round(1 / prob, 2) if prob > 0 else 1.01
 
-def get_match_odds_at_time(db, target_m_id):
+def get_match_odds_at_time(db_data, target_m_id):
     """Calcule les cotes d'un match telles qu'elles étaient AVANT qu'il ne soit joué."""
-    temp_elos = {pid: 1000.0 for pid in db["players"]}
-    completed_matches = [(mid, m) for mid, m in db["matches"].items() if m["status"] == "completed"]
+    temp_elos = {pid: 1000.0 for pid in db_data["players"]}
+    completed_matches = [(mid, m) for mid, m in db_data["matches"].items() if m["status"] == "completed"]
     completed_matches.sort(key=lambda x: x[1]["datetime"])
     
     for mid, m in completed_matches:
@@ -85,7 +86,7 @@ def get_match_odds_at_time(db, target_m_id):
             for pid in t1: temp_elos[pid] += K * (s1 - p_1_raw)
             for pid in t2: temp_elos[pid] += K * (s2 - (1 - p_1_raw))
 
-    m_target = db["matches"][target_m_id]
+    m_target = db_data["matches"][target_m_id]
     if m_target.get("type", "singles") == "singles":
         elo_1, elo_2 = temp_elos[m_target["p1"]], temp_elos[m_target["p2"]]
     else:
@@ -95,14 +96,14 @@ def get_match_odds_at_time(db, target_m_id):
     prob_p1, prob_p2, prob_draw = get_probs_with_draw(elo_1, elo_2)
     return get_odds(prob_p1), get_odds(prob_p2), get_odds(prob_draw)
 
-def recalculate_all_stats(db):
-    for pid in db["players"]:
-        db["players"][pid]["elo"] = 1000.0
-        db["players"][pid]["prono_points"] = 0
-        db["players"][pid]["stats_played"] = 0
-        db["players"][pid]["stats_won"] = 0
+def recalculate_all_stats(db_data):
+    for pid in db_data["players"]:
+        db_data["players"][pid]["elo"] = 1000.0
+        db_data["players"][pid]["prono_points"] = 0
+        db_data["players"][pid]["stats_played"] = 0
+        db_data["players"][pid]["stats_won"] = 0
 
-    completed_matches = [m for m in db["matches"].values() if m["status"] == "completed"]
+    completed_matches = [m for m in db_data["matches"].values() if m["status"] == "completed"]
     completed_matches.sort(key=lambda x: x["datetime"])
 
     for m in completed_matches:
@@ -112,7 +113,7 @@ def recalculate_all_stats(db):
         
         if match_type == "singles":
             p1, p2 = m["p1"], m["p2"]
-            elo_1, elo_2 = db["players"][p1]["elo"], db["players"][p2]["elo"]
+            elo_1, elo_2 = db_data["players"][p1]["elo"], db_data["players"][p2]["elo"]
             p_1_raw = get_prob(elo_1, elo_2)
             p_2_raw = 1 - p_1_raw
             
@@ -120,17 +121,17 @@ def recalculate_all_stats(db):
             elif winner == p2: score_1, score_2 = 0, 1
             else: score_1, score_2 = 0.5, 0.5
             
-            db["players"][p1]["elo"] += K * (score_1 - p_1_raw)
-            db["players"][p2]["elo"] += K * (score_2 - p_2_raw)
-            db["players"][p1]["stats_played"] += 1
-            db["players"][p2]["stats_played"] += 1
-            if winner == p1: db["players"][p1]["stats_won"] += 1
-            elif winner == p2: db["players"][p2]["stats_won"] += 1
+            db_data["players"][p1]["elo"] += K * (score_1 - p_1_raw)
+            db_data["players"][p2]["elo"] += K * (score_2 - p_2_raw)
+            db_data["players"][p1]["stats_played"] += 1
+            db_data["players"][p2]["stats_played"] += 1
+            if winner == p1: db_data["players"][p1]["stats_won"] += 1
+            elif winner == p2: db_data["players"][p2]["stats_won"] += 1
             
         else: # doubles
             t1, t2 = m["t1"], m["t2"]
-            elo_t1 = (db["players"][t1[0]]["elo"] + db["players"][t1[1]]["elo"]) / 2
-            elo_t2 = (db["players"][t2[0]]["elo"] + db["players"][t2[1]]["elo"]) / 2
+            elo_t1 = (db_data["players"][t1[0]]["elo"] + db_data["players"][t1[1]]["elo"]) / 2
+            elo_t2 = (db_data["players"][t2[0]]["elo"] + db_data["players"][t2[1]]["elo"]) / 2
             p_1_raw = get_prob(elo_t1, elo_t2)
             p_2_raw = 1 - p_1_raw
             
@@ -139,27 +140,27 @@ def recalculate_all_stats(db):
             else: score_1, score_2 = 0.5, 0.5
             
             for pid in t1:
-                db["players"][pid]["elo"] += K * (score_1 - p_1_raw)
-                db["players"][pid]["stats_played"] += 1
-                if winner == "t1": db["players"][pid]["stats_won"] += 1
+                db_data["players"][pid]["elo"] += K * (score_1 - p_1_raw)
+                db_data["players"][pid]["stats_played"] += 1
+                if winner == "t1": db_data["players"][pid]["stats_won"] += 1
             for pid in t2:
-                db["players"][pid]["elo"] += K * (score_2 - p_2_raw)
-                db["players"][pid]["stats_played"] += 1
-                if winner == "t2": db["players"][pid]["stats_won"] += 1
+                db_data["players"][pid]["elo"] += K * (score_2 - p_2_raw)
+                db_data["players"][pid]["stats_played"] += 1
+                if winner == "t2": db_data["players"][pid]["stats_won"] += 1
         
         for bet in m.get("bets", []):
             if bet["predicted"] == winner:
-                db["players"][bet["bettor"]]["prono_points"] += int(bet["odds"] * 10)
+                db_data["players"][bet["bettor"]]["prono_points"] += int(bet["odds"] * 10)
 
-def get_elo_history_df(db):
+def get_elo_history_df(db_data):
     records = []
     base_date = datetime(2026, 8, 10)
     
-    states = {pid: {"elo": 1000.0, "played": 0, "won": 0} for pid in db["players"]}
-    for pid, p in db["players"].items():
+    states = {pid: {"elo": 1000.0, "played": 0, "won": 0} for pid in db_data["players"]}
+    for pid, p in db_data["players"].items():
         records.append({"Joueur": p["name"], "Date": base_date, "ELO": 1000.0, "Matchs": 0, "Victoires": 0})
         
-    completed_matches = [m for m in db["matches"].values() if m["status"] == "completed"]
+    completed_matches = [m for m in db_data["matches"].values() if m["status"] == "completed"]
     completed_matches.sort(key=lambda x: x["datetime"])
     
     for m in completed_matches:
@@ -205,14 +206,14 @@ def get_elo_history_df(db):
                 states[pid]["played"] += 1
                 if winner == "t2": states[pid]["won"] += 1
                 
-        for pid, p in db["players"].items():
+        for pid, p in db_data["players"].items():
             records.append({
                 "Joueur": p["name"], "Date": dt, "ELO": states[pid]["elo"],
                 "Matchs": states[pid]["played"], "Victoires": states[pid]["won"]
             })
             
     now = datetime.now()
-    for pid, p in db["players"].items():
+    for pid, p in db_data["players"].items():
         records.append({
             "Joueur": p["name"], "Date": now, "ELO": states[pid]["elo"],
             "Matchs": states[pid]["played"], "Victoires": states[pid]["won"]
@@ -224,7 +225,10 @@ def get_elo_history_df(db):
     return df
 
 # --- INITIALISATION SESSION & COOKIES ---
-db = init_db()
+if "db" not in st.session_state:
+    st.session_state.db = fetch_remote_db()
+
+db = st.session_state.db
 cookie_controller = CookieController()
 
 if "user_id" not in st.session_state:
@@ -273,6 +277,10 @@ if st.session_state.user_id is None and not st.session_state.is_admin:
 
 # --- BARRE LATÉRALE (DASHBOARD UTILISATEUR) ---
 with st.sidebar:
+    if st.button("🔄 Rafraîchir les données", use_container_width=True):
+        st.session_state.db = fetch_remote_db()
+        st.rerun()
+
     if st.session_state.is_admin:
         st.write("👤 **Connecté en tant que : ADMIN GLOBALE**")
         st.divider()
