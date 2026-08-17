@@ -384,14 +384,19 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["🏆 Classement ELO", "📅 Match
 with tab1:
     st.header("🏆 Classement ELO des Joueurs")
     players_items = list(db["players"].items())
+    
+    # Tri initial par ELO décroissant
     players_items.sort(key=lambda x: (-x[1]["elo"], x[1]["name"].lower()))
     
     if not players_items:
         st.info("Aucun joueur n'est inscrit.")
     else:
         completed_matches = [m for m in db["matches"].values() if m["status"] == "completed"]
-        df_data = []
-        for i, (pid, p) in enumerate(players_items, 1):
+        df_active_data = []
+        df_inactive_data = []
+        
+        rank = 1
+        for pid, p in players_items:
             draws = 0
             for m in completed_matches:
                 if m["winner"] == "draw":
@@ -400,25 +405,51 @@ with tab1:
             losses = p["stats_played"] - p["stats_won"] - draws
             win_rate = (p["stats_won"] / p["stats_played"] * 100) if p["stats_played"] > 0 else 0
             
-            df_data.append({
-                "Rang": i, "Joueur": p["name"], "ELO": int(p["elo"]),
+            p_dict = {
+                "Rang": rank, "Joueur": p["name"], "ELO": int(p["elo"]),
                 "Matchs": p["stats_played"], "Victoires": p["stats_won"], 
                 "Nuls": draws, "Défaites": losses, "Taux de Victoire": win_rate
-            })
+            }
             
-        df = pd.DataFrame(df_data)
-        st.dataframe(
-            df,
-            column_config={
-                "Rang": st.column_config.NumberColumn("Rang", format="%d 🏅"),
-                "ELO": st.column_config.ProgressColumn("Points ELO", min_value=800, max_value=max(int(df["ELO"].max()) + 50, 1200), format="%d pts"),
-                "Matchs": st.column_config.NumberColumn("Matchs"),
-                "Victoires": st.column_config.NumberColumn("V", help="Victoires"),
-                "Nuls": st.column_config.NumberColumn("N", help="Matchs Nuls"),
-                "Défaites": st.column_config.NumberColumn("D", help="Défaites"),
-                "Taux de Victoire": st.column_config.ProgressColumn("Taux de Victoire", min_value=0, max_value=100, format="%d %%")
-            }, hide_index=True, use_container_width=True
-        )
+            # Séparation des joueurs ayant joué et ceux en attente
+            if p["stats_played"] > 0:
+                df_active_data.append(p_dict)
+                rank += 1 # Le rang n'augmente que pour les joueurs actifs
+            else:
+                df_inactive_data.append(p_dict)
+            
+        if df_active_data:
+            df_active = pd.DataFrame(df_active_data)
+            
+            # Application des styles (couleurs + centrage des cellules via un Styler Pandas)
+            # Couleurs choisies : Vert (#10B981), Bleu (#3B82F6), Rouge (#EF4444) - Lisibles en mode Clair/Sombre
+            styled_df = df_active.style\
+                .map(lambda _: 'color: #10B981; font-weight: bold; text-align: center;', subset=['Victoires'])\
+                .map(lambda _: 'color: #3B82F6; font-weight: bold; text-align: center;', subset=['Nuls'])\
+                .map(lambda _: 'color: #EF4444; font-weight: bold; text-align: center;', subset=['Défaites'])\
+                .set_properties(**{'text-align': 'center'}, subset=['Rang', 'Matchs', 'ELO'])
+
+            st.dataframe(
+                styled_df,
+                column_config={
+                    "Rang": st.column_config.NumberColumn("Rang", format="%d 🏅"),
+                    "ELO": st.column_config.ProgressColumn("Points ELO", min_value=800, max_value=max(int(df_active["ELO"].max()) + 50, 1200), format="%d pts"),
+                    "Matchs": st.column_config.NumberColumn("Matchs"),
+                    "Victoires": st.column_config.NumberColumn("V", help="Victoires"),
+                    "Nuls": st.column_config.NumberColumn("N", help="Matchs Nuls"),
+                    "Défaites": st.column_config.NumberColumn("D", help="Défaites"),
+                    "Taux de Victoire": st.column_config.ProgressColumn("Taux de Victoire", min_value=0, max_value=100, format="%d %%")
+                }, hide_index=True, use_container_width=True
+            )
+        else:
+            st.info("Aucun match n'a encore été joué par les joueurs actifs.")
+            
+        # Paragraphe séparé pour les joueurs n'ayant pas encore joué
+        if df_inactive_data:
+            st.markdown("<br>### ⏳ Joueurs en attente de leur premier match", unsafe_allow_html=True)
+            st.caption("Leur score ELO de départ est fixé à 1000 points. Ils intègreront le classement dès leur premier match.")
+            inactive_names = [p["Joueur"] for p in df_inactive_data]
+            st.markdown(f"> {', '.join(inactive_names)}")
         
         st.divider()
         st.subheader("📈 Historique des leaders et évolution ELO")
@@ -429,16 +460,32 @@ with tab1:
         elif time_filter == "7 derniers jours": df_hist = df_hist[df_hist["Date"] >= datetime.now() - timedelta(days=7)]
 
         if not df_hist.empty:
+            # Identifier les joueurs inactifs pour configurer leurs courbes
+            inactive_players = [p["name"] for p in db["players"].values() if p["stats_played"] == 0]
+
             df_hist["Info_Joueur"] = df_hist.apply(lambda x: f"• <b>{x['Joueur']}</b> (M: {x['Matchs']} | V: {x['Victoires']})", axis=1)
             df_hist["Infos_Combinees"] = df_hist.groupby(["Date", "ELO"])["Info_Joueur"].transform(lambda x: "<br>".join(x))
             fig = px.line(df_hist, x="Date", y="ELO", color="Joueur", markers=True, hover_data={"Date": "|%d/%m/%Y %H:%M", "Infos_Combinees": True})
+            
+            # Modification des traces pour gérer la légende et la visibilité
+            for trace in fig.data:
+                if trace.name in inactive_players:
+                    trace.visible = 'legendonly' # Masque la courbe par défaut (affichable au clic)
+                    trace.legendgroup = 'inactifs'
+                    trace.legendgrouptitle = dict(text="Joueurs en attente") # Paragraphe séparé dans la légende
+                else:
+                    trace.legendgroup = 'actifs'
+                    trace.legendgrouptitle = dict(text="Joueurs actifs")
+
             fig.update_traces(mode="lines+markers", line=dict(width=3), marker=dict(size=6), hovertemplate="Date : <b>%{x}</b><br>Score ELO : <b>%{y:.0f} pts</b><br><br>%{customdata[0]}<extra></extra>")
-            fig.update_layout(hovermode="closest", legend_title="Joueurs", xaxis_title="", yaxis_title="Score ELO", margin=dict(l=0, r=0, t=30, b=0), plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
+            
+            # Suppression du titre de légende global, vu que nous utilisons des "group titles"
+            fig.update_layout(hovermode="closest", legend_title_text="", xaxis_title="", yaxis_title="Score ELO", margin=dict(l=0, r=0, t=30, b=0), plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
             fig.update_yaxes(showgrid=True, gridcolor='rgba(255,255,255,0.1)')
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Aucune donnée disponible pour cette période.")
-
+            
 # --- TAB 2 : MATCHS ET PRONOS ---
 with tab2:
     st.header("📅 Matchs & Pronostics")
