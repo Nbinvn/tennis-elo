@@ -405,41 +405,83 @@ with tab1:
             losses = p["stats_played"] - p["stats_won"] - draws
             win_rate = (p["stats_won"] / p["stats_played"] * 100) if p["stats_played"] > 0 else 0
             
-            p_dict = {
-                "Rang": rank, "Joueur": p["name"], "ELO": int(p["elo"]),
-                "Matchs": p["stats_played"], "Victoires": p["stats_won"], 
-                "Nuls": draws, "Défaites": losses, "Taux de Victoire": win_rate
-            }
-            
             # Séparation des joueurs ayant joué et ceux en attente
             if p["stats_played"] > 0:
-                df_active_data.append(p_dict)
-                rank += 1 # Le rang n'augmente que pour les joueurs actifs
+                # Attribution des médailles uniquement pour le Top 3
+                if rank == 1: str_rank = "1 🥇"
+                elif rank == 2: str_rank = "2 🥈"
+                elif rank == 3: str_rank = "3 🥉"
+                else: str_rank = str(rank)
+                
+                df_active_data.append({
+                    "Rang": str_rank, 
+                    "Joueur": p["name"], 
+                    "Points ELO": int(p["elo"]),
+                    "Matchs": p["stats_played"], 
+                    "V": p["stats_won"], 
+                    "N": draws, 
+                    "D": losses, 
+                    "Taux de Victoire": win_rate
+                })
+                rank += 1
             else:
-                df_inactive_data.append(p_dict)
+                df_inactive_data.append({
+                    "Rang": "-", 
+                    "Joueur": p["name"], 
+                    "Points ELO": int(p["elo"]),
+                    "Matchs": p["stats_played"], 
+                    "V": p["stats_won"], 
+                    "N": draws, 
+                    "D": losses, 
+                    "Taux de Victoire": win_rate
+                })
             
         if df_active_data:
             df_active = pd.DataFrame(df_active_data)
             
-            # Application des styles (couleurs + centrage des cellules via un Styler Pandas)
-            # Couleurs choisies : Vert (#10B981), Bleu (#3B82F6), Rouge (#EF4444) - Lisibles en mode Clair/Sombre
+            # Fonction pour générer le design dynamique de la barre "Taux de Victoire"
+            def style_win_rate(val):
+                if val == 0:
+                    c = "#EF4444" # Rouge
+                elif val < 25:
+                    c = "#EF4444" # Rouge
+                elif val < 50:
+                    c = "#F97316" # Orange
+                elif val < 75:
+                    c = "#3B82F6" # Bleu
+                else:
+                    c = "#10B981" # Vert
+                    
+                if val == 0:
+                    bg = "transparent"
+                else:
+                    # Création d'un dégradé linéaire pour simuler une jauge de progression
+                    hex_to_rgb = lambda h: tuple(int(h.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+                    r, g, b = hex_to_rgb(c)
+                    bg = f"linear-gradient(90deg, rgba({r},{g},{b},0.3) {val}%, transparent {val}%)"
+                    
+                return f"color: {c}; font-weight: bold; text-align: center; background: {bg};"
+
+            # Application des styles et formatages conditionnels via Pandas Styler
             styled_df = df_active.style\
-                .map(lambda _: 'color: #10B981; font-weight: bold; text-align: center;', subset=['Victoires'])\
-                .map(lambda _: 'color: #3B82F6; font-weight: bold; text-align: center;', subset=['Nuls'])\
-                .map(lambda _: 'color: #EF4444; font-weight: bold; text-align: center;', subset=['Défaites'])\
-                .set_properties(**{'text-align': 'center'}, subset=['Rang', 'Matchs', 'ELO'])
+                .format({
+                    "Points ELO": "{} pts",
+                    "V": lambda x: "-" if x == 0 else str(x),
+                    "N": lambda x: "-" if x == 0 else str(x),
+                    "D": lambda x: "-" if x == 0 else str(x),
+                    "Taux de Victoire": lambda x: f"{int(x)} %"
+                })\
+                .map(lambda _: 'font-weight: bold; text-align: center;', subset=['Rang', 'Joueur', 'Points ELO'])\
+                .map(lambda _: 'text-align: center;', subset=['Matchs'])\
+                .map(lambda v: 'color: #9CA3AF; font-weight: bold; text-align: center;' if v == 0 else 'color: #10B981; font-weight: bold; text-align: center;', subset=['V'])\
+                .map(lambda v: 'color: #9CA3AF; font-weight: bold; text-align: center;' if v == 0 else 'color: #3B82F6; font-weight: bold; text-align: center;', subset=['N'])\
+                .map(lambda v: 'color: #9CA3AF; font-weight: bold; text-align: center;' if v == 0 else 'color: #EF4444; font-weight: bold; text-align: center;', subset=['D'])\
+                .map(style_win_rate, subset=['Taux de Victoire'])
 
             st.dataframe(
                 styled_df,
-                column_config={
-                    "Rang": st.column_config.NumberColumn("Rang", format="%d 🏅"),
-                    "ELO": st.column_config.ProgressColumn("Points ELO", min_value=800, max_value=max(int(df_active["ELO"].max()) + 50, 1200), format="%d pts"),
-                    "Matchs": st.column_config.NumberColumn("Matchs"),
-                    "Victoires": st.column_config.NumberColumn("V", help="Victoires"),
-                    "Nuls": st.column_config.NumberColumn("N", help="Matchs Nuls"),
-                    "Défaites": st.column_config.NumberColumn("D", help="Défaites"),
-                    "Taux de Victoire": st.column_config.ProgressColumn("Taux de Victoire", min_value=0, max_value=100, format="%d %%")
-                }, hide_index=True, use_container_width=True
+                hide_index=True, 
+                use_container_width=True
             )
         else:
             st.info("Aucun match n'a encore été joué par les joueurs actifs.")
@@ -479,7 +521,6 @@ with tab1:
 
             fig.update_traces(mode="lines+markers", line=dict(width=3), marker=dict(size=6), hovertemplate="Date : <b>%{x}</b><br>Score ELO : <b>%{y:.0f} pts</b><br><br>%{customdata[0]}<extra></extra>")
             
-            # Suppression du titre de légende global, vu que nous utilisons des "group titles"
             fig.update_layout(hovermode="closest", legend_title_text="", xaxis_title="", yaxis_title="Score ELO", margin=dict(l=0, r=0, t=30, b=0), plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
             fig.update_yaxes(showgrid=True, gridcolor='rgba(255,255,255,0.1)')
             st.plotly_chart(fig, use_container_width=True)
