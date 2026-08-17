@@ -407,7 +407,6 @@ with tab1:
             
             # Séparation des joueurs ayant joué et ceux en attente
             if p["stats_played"] > 0:
-                # Attribution des médailles uniquement pour le Top 3
                 if rank == 1: str_rank = "1 🥇"
                 elif rank == 2: str_rank = "2 🥈"
                 elif rank == 3: str_rank = "3 🥉"
@@ -421,77 +420,135 @@ with tab1:
                     "V": p["stats_won"], 
                     "N": draws, 
                     "D": losses, 
-                    "Taux de Victoire": win_rate
+                    "Taux de Victoire": int(win_rate)
                 })
                 rank += 1
             else:
-                df_inactive_data.append({
-                    "Rang": "-", 
-                    "Joueur": p["name"], 
-                    "Points ELO": int(p["elo"]),
-                    "Matchs": p["stats_played"], 
-                    "V": p["stats_won"], 
-                    "N": draws, 
-                    "D": losses, 
-                    "Taux de Victoire": win_rate
-                })
+                df_inactive_data.append(p["name"])
             
         if df_active_data:
-            df_active = pd.DataFrame(df_active_data)
+            # Création du style CSS pour forcer le centrage de toutes les cellules/en-têtes et styliser la barre
+            custom_css = """
+            <style>
+            .elo-table {
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 10px;
+                font-family: sans-serif;
+            }
+            .elo-table th {
+                text-align: center !important;
+                padding: 10px;
+                border-bottom: 1px solid rgba(128, 128, 128, 0.3);
+                color: #9CA3AF;
+                font-weight: normal;
+                font-size: 14px;
+            }
+            .elo-table td {
+                text-align: center !important;
+                padding: 12px 10px;
+                border-bottom: 1px solid rgba(128, 128, 128, 0.1);
+                vertical-align: middle;
+            }
+            .elo-table tr:hover {
+                background-color: rgba(128, 128, 128, 0.05);
+            }
+            .bar-container {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 10px;
+            }
+            .bar-bg {
+                width: 70px;
+                height: 8px;
+                background-color: rgba(128, 128, 128, 0.2);
+                border-radius: 4px;
+                overflow: hidden;
+            }
+            .bar-fill {
+                height: 100%;
+                border-radius: 4px;
+                transition: width 0.5s ease-in-out;
+            }
+            </style>
+            """
             
-            # Fonction pour générer le design dynamique de la barre "Taux de Victoire"
-            def style_win_rate(val):
-                if val == 0:
-                    c = "#EF4444" # Rouge
-                elif val < 25:
-                    c = "#EF4444" # Rouge
-                elif val < 50:
-                    c = "#F97316" # Orange
-                elif val < 75:
-                    c = "#3B82F6" # Bleu
+            # Construction de l'en-tête du tableau
+            html_table = f"""
+            {custom_css}
+            <table class="elo-table">
+                <thead>
+                    <tr>
+                        <th>Rang</th>
+                        <th>Joueur</th>
+                        <th>Points ELO</th>
+                        <th>Matchs</th>
+                        <th>V</th>
+                        <th>N</th>
+                        <th>D</th>
+                        <th>Taux de Victoire</th>
+                    </tr>
+                </thead>
+                <tbody>
+            """
+            
+            # Construction des lignes du tableau
+            for data in df_active_data:
+                # Formatage des zéros en tirets gris
+                v_str = f'<span style="color: #10B981; font-weight: bold;">{data["V"]}</span>' if data["V"] > 0 else '<span style="color: #9CA3AF; font-weight: bold;">-</span>'
+                n_str = f'<span style="color: #3B82F6; font-weight: bold;">{data["N"]}</span>' if data["N"] > 0 else '<span style="color: #9CA3AF; font-weight: bold;">-</span>'
+                d_str = f'<span style="color: #EF4444; font-weight: bold;">{data["D"]}</span>' if data["D"] > 0 else '<span style="color: #9CA3AF; font-weight: bold;">-</span>'
+                
+                # Formatage de la courbe de victoire et de sa couleur
+                val_pct = data["Taux de Victoire"]
+                if val_pct == 0:
+                    color = "#EF4444" # Rouge
+                elif val_pct < 25:
+                    color = "#EF4444" # Rouge
+                elif val_pct < 50:
+                    color = "#F97316" # Orange
+                elif val_pct < 75:
+                    color = "#3B82F6" # Bleu
                 else:
-                    c = "#10B981" # Vert
-                    
-                if val == 0:
-                    bg = "transparent"
-                else:
-                    # Création d'un dégradé linéaire pour simuler une jauge de progression
-                    hex_to_rgb = lambda h: tuple(int(h.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-                    r, g, b = hex_to_rgb(c)
-                    bg = f"linear-gradient(90deg, rgba({r},{g},{b},0.3) {val}%, transparent {val}%)"
-                    
-                return f"color: {c}; font-weight: bold; text-align: center; background: {bg};"
-
-            # Application des styles et formatages conditionnels via Pandas Styler
-            styled_df = df_active.style\
-                .format({
-                    "Points ELO": "{} pts",
-                    "V": lambda x: "-" if x == 0 else str(x),
-                    "N": lambda x: "-" if x == 0 else str(x),
-                    "D": lambda x: "-" if x == 0 else str(x),
-                    "Taux de Victoire": lambda x: f"{int(x)} %"
-                })\
-                .map(lambda _: 'font-weight: bold; text-align: center;', subset=['Rang', 'Joueur', 'Points ELO'])\
-                .map(lambda _: 'text-align: center;', subset=['Matchs'])\
-                .map(lambda v: 'color: #9CA3AF; font-weight: bold; text-align: center;' if v == 0 else 'color: #10B981; font-weight: bold; text-align: center;', subset=['V'])\
-                .map(lambda v: 'color: #9CA3AF; font-weight: bold; text-align: center;' if v == 0 else 'color: #3B82F6; font-weight: bold; text-align: center;', subset=['N'])\
-                .map(lambda v: 'color: #9CA3AF; font-weight: bold; text-align: center;' if v == 0 else 'color: #EF4444; font-weight: bold; text-align: center;', subset=['D'])\
-                .map(style_win_rate, subset=['Taux de Victoire'])
-
-            st.dataframe(
-                styled_df,
-                hide_index=True, 
-                use_container_width=True
-            )
+                    color = "#10B981" # Vert
+                
+                bar_html = f"""
+                <div class="bar-container">
+                    <div class="bar-bg">
+                        <div class="bar-fill" style="width: {val_pct}%; background-color: {color};"></div>
+                    </div>
+                    <span style="color: {color}; font-weight: bold; width: 40px; text-align: right;">{val_pct} %</span>
+                </div>
+                """
+                
+                html_table += f"""
+                <tr>
+                    <td style="font-weight: bold;">{data["Rang"]}</td>
+                    <td style="font-weight: bold;">{data["Joueur"]}</td>
+                    <td style="font-weight: bold;">{data["Points ELO"]} pts</td>
+                    <td>{data["Matchs"]}</td>
+                    <td>{v_str}</td>
+                    <td>{n_str}</td>
+                    <td>{d_str}</td>
+                    <td>{bar_html}</td>
+                </tr>
+                """
+                
+            html_table += "</tbody></table>"
+            
+            # Affichage du tableau HTML personnalisé
+            st.markdown(html_table, unsafe_allow_html=True)
+            
         else:
             st.info("Aucun match n'a encore été joué par les joueurs actifs.")
             
         # Paragraphe séparé pour les joueurs n'ayant pas encore joué
         if df_inactive_data:
-            st.markdown("<br>### ⏳ Joueurs en attente de leur premier match", unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("### ⏳ Joueurs en attente de leur premier match")
             st.caption("Leur score ELO de départ est fixé à 1000 points. Ils intègreront le classement dès leur premier match.")
-            inactive_names = [p["Joueur"] for p in df_inactive_data]
-            st.markdown(f"> {', '.join(inactive_names)}")
+            st.markdown(f"> {', '.join(df_inactive_data)}")
         
         st.divider()
         st.subheader("📈 Historique des leaders et évolution ELO")
