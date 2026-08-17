@@ -427,126 +427,48 @@ with tab1:
                 df_inactive_data.append(p["name"])
             
         if df_active_data:
-            # Création du style CSS pour forcer le centrage de toutes les cellules/en-têtes et styliser la barre
-            custom_css = """
-            <style>
-            .elo-table {
-                width: 100%;
-                border-collapse: collapse;
-                margin-top: 10px;
-                font-family: sans-serif;
-            }
-            .elo-table th {
-                text-align: center !important;
-                padding: 10px;
-                border-bottom: 1px solid rgba(128, 128, 128, 0.3);
-                color: #9CA3AF;
-                font-weight: normal;
-                font-size: 14px;
-            }
-            .elo-table td {
-                text-align: center !important;
-                padding: 12px 10px;
-                border-bottom: 1px solid rgba(128, 128, 128, 0.1);
-                vertical-align: middle;
-            }
-            .elo-table tr:hover {
-                background-color: rgba(128, 128, 128, 0.05);
-            }
-            .bar-container {
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                gap: 10px;
-            }
-            .bar-bg {
-                width: 70px;
-                height: 8px;
-                background-color: rgba(128, 128, 128, 0.2);
-                border-radius: 4px;
-                overflow: hidden;
-            }
-            .bar-fill {
-                height: 100%;
-                border-radius: 4px;
-                transition: width 0.5s ease-in-out;
-            }
-            </style>
-            """
+            # CSS et HTML nettoyés de toute indentation initiale pour éviter l'interprétation Markdown "code block"
+            custom_css = """<style>
+.elo-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-family: sans-serif; }
+.elo-table th { text-align: center !important; padding: 10px; border-bottom: 1px solid rgba(128, 128, 128, 0.3); color: #9CA3AF; font-weight: normal; font-size: 14px; }
+.elo-table td { text-align: center !important; padding: 12px 10px; border-bottom: 1px solid rgba(128, 128, 128, 0.1); vertical-align: middle; }
+.elo-table tr:hover { background-color: rgba(128, 128, 128, 0.05); }
+.bar-container { display: flex; align-items: center; justify-content: center; gap: 10px; }
+.bar-bg { width: 70px; height: 8px; background-color: rgba(128, 128, 128, 0.2); border-radius: 4px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease-in-out; }
+</style>"""
             
-            # Construction de l'en-tête du tableau
-            html_table = f"""
-            {custom_css}
-            <table class="elo-table">
-                <thead>
-                    <tr>
-                        <th>Rang</th>
-                        <th>Joueur</th>
-                        <th>Points ELO</th>
-                        <th>Matchs</th>
-                        <th>V</th>
-                        <th>N</th>
-                        <th>D</th>
-                        <th>Taux de Victoire</th>
-                    </tr>
-                </thead>
-                <tbody>
-            """
+            html_table = f"{custom_css}<table class='elo-table'><thead><tr><th>Rang</th><th>Joueur</th><th>Points ELO</th><th>Matchs</th><th>V</th><th>N</th><th>D</th><th>Taux de Victoire</th></tr></thead><tbody>"
             
-            # Construction des lignes du tableau
             for data in df_active_data:
-                # Formatage des zéros en tirets gris
                 v_str = f'<span style="color: #10B981; font-weight: bold;">{data["V"]}</span>' if data["V"] > 0 else '<span style="color: #9CA3AF; font-weight: bold;">-</span>'
                 n_str = f'<span style="color: #3B82F6; font-weight: bold;">{data["N"]}</span>' if data["N"] > 0 else '<span style="color: #9CA3AF; font-weight: bold;">-</span>'
                 d_str = f'<span style="color: #EF4444; font-weight: bold;">{data["D"]}</span>' if data["D"] > 0 else '<span style="color: #9CA3AF; font-weight: bold;">-</span>'
                 
-                # Formatage de la courbe de victoire et de sa couleur
                 val_pct = data["Taux de Victoire"]
-                if val_pct == 0:
-                    color = "#EF4444" # Rouge
-                elif val_pct < 25:
-                    color = "#EF4444" # Rouge
+                if val_pct == 0 or val_pct < 25:
+                    color = "#EF4444"
                 elif val_pct < 50:
-                    color = "#F97316" # Orange
+                    color = "#F97316"
                 elif val_pct < 75:
-                    color = "#3B82F6" # Bleu
+                    color = "#3B82F6"
                 else:
-                    color = "#10B981" # Vert
+                    color = "#10B981"
                 
-                bar_html = f"""
-                <div class="bar-container">
-                    <div class="bar-bg">
-                        <div class="bar-fill" style="width: {val_pct}%; background-color: {color};"></div>
-                    </div>
-                    <span style="color: {color}; font-weight: bold; width: 40px; text-align: right;">{val_pct} %</span>
-                </div>
-                """
+                bar_html = f'<div class="bar-container"><div class="bar-bg"><div class="bar-fill" style="width: {val_pct}%; background-color: {color};"></div></div><span style="color: {color}; font-weight: bold; width: 40px; text-align: right;">{val_pct} %</span></div>'
                 
-                html_table += f"""
-                <tr>
-                    <td style="font-weight: bold;">{data["Rang"]}</td>
-                    <td style="font-weight: bold;">{data["Joueur"]}</td>
-                    <td style="font-weight: bold;">{data["Points ELO"]} pts</td>
-                    <td>{data["Matchs"]}</td>
-                    <td>{v_str}</td>
-                    <td>{n_str}</td>
-                    <td>{d_str}</td>
-                    <td>{bar_html}</td>
-                </tr>
-                """
+                html_table += f'<tr><td style="font-weight: bold;">{data["Rang"]}</td><td style="font-weight: bold;">{data["Joueur"]}</td><td style="font-weight: bold;">{data["Points ELO"]} pts</td><td>{data["Matchs"]}</td><td>{v_str}</td><td>{n_str}</td><td>{d_str}</td><td>{bar_html}</td></tr>'
                 
             html_table += "</tbody></table>"
             
-            # Affichage du tableau HTML personnalisé
             st.markdown(html_table, unsafe_allow_html=True)
             
         else:
             st.info("Aucun match n'a encore été joué par les joueurs actifs.")
             
-        # Paragraphe séparé pour les joueurs n'ayant pas encore joué
         if df_inactive_data:
             st.markdown("<br>", unsafe_allow_html=True)
-            st.markdown("### ⏳ Joueurs en attente de leur premier match")
+            st.subheader("⏳ Joueurs en attente de leur premier match")
             st.caption("Leur score ELO de départ est fixé à 1000 points. Ils intègreront le classement dès leur premier match.")
             st.markdown(f"> {', '.join(df_inactive_data)}")
         
@@ -559,19 +481,17 @@ with tab1:
         elif time_filter == "7 derniers jours": df_hist = df_hist[df_hist["Date"] >= datetime.now() - timedelta(days=7)]
 
         if not df_hist.empty:
-            # Identifier les joueurs inactifs pour configurer leurs courbes
             inactive_players = [p["name"] for p in db["players"].values() if p["stats_played"] == 0]
 
             df_hist["Info_Joueur"] = df_hist.apply(lambda x: f"• <b>{x['Joueur']}</b> (M: {x['Matchs']} | V: {x['Victoires']})", axis=1)
             df_hist["Infos_Combinees"] = df_hist.groupby(["Date", "ELO"])["Info_Joueur"].transform(lambda x: "<br>".join(x))
             fig = px.line(df_hist, x="Date", y="ELO", color="Joueur", markers=True, hover_data={"Date": "|%d/%m/%Y %H:%M", "Infos_Combinees": True})
             
-            # Modification des traces pour gérer la légende et la visibilité
             for trace in fig.data:
                 if trace.name in inactive_players:
-                    trace.visible = 'legendonly' # Masque la courbe par défaut (affichable au clic)
+                    trace.visible = 'legendonly'
                     trace.legendgroup = 'inactifs'
-                    trace.legendgrouptitle = dict(text="Joueurs en attente") # Paragraphe séparé dans la légende
+                    trace.legendgrouptitle = dict(text="Joueurs en attente")
                 else:
                     trace.legendgroup = 'actifs'
                     trace.legendgrouptitle = dict(text="Joueurs actifs")
