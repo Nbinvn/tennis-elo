@@ -430,7 +430,7 @@ with tab1:
             # CSS et HTML nettoyés de toute indentation initiale pour éviter l'interprétation Markdown "code block"
             custom_css = """<style>
 .elo-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-family: sans-serif; }
-.elo-table th { text-align: center !important; padding: 10px; border-bottom: 1px solid rgba(128, 128, 128, 0.3); color: #9CA3AF; font-weight: normal; font-size: 14px; }
+.elo-table th { text-align: center !important; padding: 10px; border-bottom: 1px solid rgba(128, 128, 128, 0.3); background-color: rgba(0, 0, 0, 0.4); color: #E5E7EB; font-weight: bold; font-size: 14px; }
 .elo-table td { text-align: center !important; padding: 12px 10px; border-bottom: 1px solid rgba(128, 128, 128, 0.1); vertical-align: middle; }
 .elo-table tr:hover { background-color: rgba(128, 128, 128, 0.05); }
 .bar-container { display: flex; align-items: center; justify-content: center; gap: 10px; }
@@ -440,7 +440,7 @@ with tab1:
             
             html_table = f"{custom_css}<table class='elo-table'><thead><tr><th>Rang</th><th>Joueur</th><th>Points ELO</th><th>Matchs</th><th>V</th><th>N</th><th>D</th><th>Taux de Victoire</th></tr></thead><tbody>"
             
-            for data in df_active_data:
+            for i, data in enumerate(df_active_data):
                 v_str = f'<span style="color: #10B981; font-weight: bold;">{data["V"]}</span>' if data["V"] > 0 else '<span style="color: #9CA3AF; font-weight: bold;">-</span>'
                 n_str = f'<span style="color: #3B82F6; font-weight: bold;">{data["N"]}</span>' if data["N"] > 0 else '<span style="color: #9CA3AF; font-weight: bold;">-</span>'
                 d_str = f'<span style="color: #EF4444; font-weight: bold;">{data["D"]}</span>' if data["D"] > 0 else '<span style="color: #9CA3AF; font-weight: bold;">-</span>'
@@ -455,9 +455,13 @@ with tab1:
                 else:
                     color = "#10B981"
                 
-                bar_html = f'<div class="bar-container"><div class="bar-bg"><div class="bar-fill" style="width: {val_pct}%; background-color: {color};"></div></div><span style="color: {color}; font-weight: bold; width: 40px; text-align: right;">{val_pct} %</span></div>'
+                # width: 50px et white-space: nowrap ajoutés pour empêcher le retour à la ligne
+                bar_html = f'<div class="bar-container"><div class="bar-bg"><div class="bar-fill" style="width: {val_pct}%; background-color: {color};"></div></div><span style="color: {color}; font-weight: bold; width: 50px; text-align: right; white-space: nowrap;">{val_pct} %</span></div>'
                 
-                html_table += f'<tr><td style="font-weight: bold;">{data["Rang"]}</td><td style="font-weight: bold;">{data["Joueur"]}</td><td style="font-weight: bold;">{data["Points ELO"]} pts</td><td>{data["Matchs"]}</td><td>{v_str}</td><td>{n_str}</td><td>{d_str}</td><td>{bar_html}</td></tr>'
+                # Gestion du gras uniquement pour les 3 premiers
+                fw = "bold" if i < 3 else "normal"
+                
+                html_table += f'<tr><td style="font-weight: {fw};">{data["Rang"]}</td><td style="font-weight: {fw};">{data["Joueur"]}</td><td style="font-weight: {fw};">{data["Points ELO"]} pts</td><td>{data["Matchs"]}</td><td>{v_str}</td><td>{n_str}</td><td>{d_str}</td><td>{bar_html}</td></tr>'
                 
             html_table += "</tbody></table>"
             
