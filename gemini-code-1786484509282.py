@@ -3,6 +3,7 @@ import os
 import uuid
 import copy
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -602,7 +603,8 @@ with tab2:
         else:
             st.info("Aucun pronostic validé.")
         
-        is_started = datetime.now() > dt
+        maintenant_local = datetime.now(ZoneInfo("America/Toronto")).replace(tzinfo=None)
+        is_started = maintenant_local > dt
         my_bet = next((b for b in m["bets"] if b["bettor"] == st.session_state.user_id), None)
         
         if my_bet:
